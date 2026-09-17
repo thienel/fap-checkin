@@ -10,5 +10,11 @@ PRODUCT_NAME = fap_check_attendance
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = com.example.fapCheckAttendance
 
+// Firebase Auth on macOS stores its session in the Keychain. Automatic
+// signing is required so the Keychain Sharing entitlement receives a valid
+// application identifier prefix.
+DEVELOPMENT_TEAM = 9VDRJ4HRN6
+CODE_SIGN_IDENTITY = Apple Development
+
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.

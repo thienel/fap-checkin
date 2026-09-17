@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -25,6 +27,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _refresh();
+    unawaited(widget.api.syncPendingCheckIns().catchError((_) {}));
   }
 
   void _refresh() {
@@ -165,6 +168,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                   const SizedBox(height: 28),
+                  if (!widget.api.isSheetSyncConfigured) ...[
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 18),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF4D6),
+                        border: Border.all(color: const Color(0xFFE8C66A)),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Color(0xFF805D00)),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Chưa cấu hình Apps Script: lượt điểm danh vẫn lưu '
+                              'trong Firestore nhưng chưa được chép sang Google Sheets.',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   FutureBuilder<AttendanceSession?>(
                     future: _activeSession,
                     builder: (context, snapshot) {

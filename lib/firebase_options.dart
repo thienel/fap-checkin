@@ -18,6 +18,18 @@ abstract final class DesktopFirebaseOptions {
     'FIREBASE_IOS_BUNDLE_ID',
     defaultValue: 'com.example.fapCheckAttendance',
   );
+  static const _configuredPublicWebUrl = String.fromEnvironment(
+    'PUBLIC_WEB_URL',
+  );
+  static const appsScriptUrl = String.fromEnvironment('APPS_SCRIPT_URL');
+  static const appsScriptSecret = String.fromEnvironment('APPS_SCRIPT_SECRET');
+
+  static String get publicWebUrl => _configuredPublicWebUrl.isNotEmpty
+      ? _configuredPublicWebUrl.replaceFirst(RegExp(r'/$'), '')
+      : 'https://$projectId.web.app';
+
+  static bool get isSheetSyncConfigured =>
+      appsScriptUrl.isNotEmpty && appsScriptSecret.isNotEmpty;
 
   static bool get isConfigured =>
       apiKey.isNotEmpty &&

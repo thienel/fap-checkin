@@ -38,6 +38,9 @@ class _LoginScreenState extends State<LoginScreen> {
         () => _error = switch (error.code) {
           'invalid-credential' => 'Email hoặc mật khẩu không đúng.',
           'too-many-requests' => 'Thử lại sau vì có quá nhiều lần đăng nhập.',
+          'keychain-error' =>
+            'macOS chưa cấp quyền Keychain cho ứng dụng. Hãy kiểm tra '
+                'Keychain Sharing và cấu hình ký ứng dụng.',
           _ => error.message ?? 'Không thể đăng nhập.',
         },
       );

@@ -2,19 +2,180 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
     function isTeacher() {
-      return request.auth != null
+      return signedIn()
         && get(/databases/$(database)/documents/teachers/$(request.auth.uid)).data.active == true;
     }
 
+    function isGoogleUser() {
+      return signedIn()
+        && request.auth.token.firebase.sign_in_provider == 'google.com'
+        && request.auth.token.email is string;
+    }
+
+    function sessionData(sessionId) {
+      return get(/databases/$(database)/documents/attendanceSessions/$(sessionId)).data;
+    }
+
+    function sessionDataAfter(sessionId) {
+      return getAfter(/databases/$(database)/documents/attendanceSessions/$(sessionId)).data;
+    }
+
+    function tokenData(token) {
+      return get(/databases/$(database)/documents/qrTokens/$(token)).data;
+    }
+
     match /teachers/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow write: if false;
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
+    }
+
+    match /courseClasses/{courseClassId} {
+      // Creating a course-class first reads its deterministic ID to detect a
+      // duplicate. A missing document has no resource.data, so allow that
+      // not-found read explicitly for authenticated teachers.
+      allow get: if isTeacher()
+        && (
+          !exists(/databases/$(database)/documents/courseClasses/$(courseClassId))
+          || resource.data.ownerUid == request.auth.uid
+        );
+      allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isTeacher()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'subject', 'classCode', 'startDate', 'slotCount', 'weekLabel',
+          'schedule', 'ownerUid', 'createdAt'
+        ])
+        && request.resource.data.createdAt == request.time;
+      allow update: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /activeAttendanceSessions/{uid} {
+      allow get: if isTeacher() && request.auth.uid == uid;
+      allow list: if false;
+      allow create, update: if isTeacher()
+        && request.auth.uid == uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['ownerUid', 'sessionId', 'createdAt'])
+        && request.resource.data.createdAt == request.time
+        && sessionDataAfter(request.resource.data.sessionId).ownerUid == request.auth.uid;
+      allow delete: if isTeacher() && request.auth.uid == uid;
     }
 
     match /attendanceSessions/{sessionId} {
-      allow read: if isTeacher() && resource.data.ownerUid == request.auth.uid;
-      allow write: if false;
+      allow get: if (isTeacher() && resource.data.ownerUid == request.auth.uid)
+        || (isGoogleUser() && resource.data.status == 'active');
+      allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isTeacher()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.status == 'active'
+        && request.resource.data.startedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'courseClassId', 'subject', 'classCode', 'slot',
+          'slotKey', 'date', 'rotationSeconds', 'validitySeconds', 'status',
+          'startedAt'
+        ]);
+      allow update: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /qrTokens/{token} {
+      allow get: if (isTeacher() && resource.data.ownerUid == request.auth.uid)
+        || (isGoogleUser()
+          && resource.data.issuedAt is timestamp
+          && resource.data.validitySeconds is int
+          && resource.data.validitySeconds >= 2
+          && resource.data.validitySeconds <= 120
+          && request.time <= resource.data.issuedAt
+            + duration.value(resource.data.validitySeconds, 's'));
+      allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isTeacher()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'sessionId', 'issuedAt', 'validitySeconds'
+        ])
+        && request.resource.data.issuedAt == request.time
+        && request.resource.data.validitySeconds is int
+        && request.resource.data.validitySeconds >= 2
+        && request.resource.data.validitySeconds <= 120
+        && sessionData(request.resource.data.sessionId).ownerUid == request.auth.uid
+        && sessionData(request.resource.data.sessionId).status == 'active'
+        && request.resource.data.validitySeconds
+          == sessionData(request.resource.data.sessionId).validitySeconds;
+      allow update: if false;
+      allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    match /attendance/{courseClassId}/slots/{slotKey}/checkIns/{userId} {
+      allow get: if signedIn()
+        && (request.auth.uid == userId
+          || (isTeacher() && resource.data.ownerUid == request.auth.uid));
+      allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+      allow create: if isGoogleUser()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'firebaseUid', 'email', 'sessionId', 'courseClassId',
+          'subject', 'classCode', 'slot', 'slotKey', 'date', 'qrToken',
+          'checkedInAt', 'createdAt', 'syncStatus'
+        ])
+        && request.resource.data.firebaseUid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.courseClassId == courseClassId
+        && request.resource.data.slotKey == slotKey
+        && request.resource.data.checkedInAt == request.time
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.syncStatus == 'pending'
+        && sessionData(request.resource.data.sessionId).status == 'active'
+        && request.resource.data.ownerUid
+          == sessionData(request.resource.data.sessionId).ownerUid
+        && request.resource.data.courseClassId
+          == sessionData(request.resource.data.sessionId).courseClassId
+        && request.resource.data.subject
+          == sessionData(request.resource.data.sessionId).subject
+        && request.resource.data.classCode
+          == sessionData(request.resource.data.sessionId).classCode
+        && request.resource.data.slot
+          == sessionData(request.resource.data.sessionId).slot
+        && request.resource.data.slotKey
+          == sessionData(request.resource.data.sessionId).slotKey
+        && request.resource.data.date
+          == sessionData(request.resource.data.sessionId).date
+        && tokenData(request.resource.data.qrToken).sessionId
+          == request.resource.data.sessionId
+        && tokenData(request.resource.data.qrToken).issuedAt is timestamp
+        && tokenData(request.resource.data.qrToken).validitySeconds is int
+        && request.time <= tokenData(request.resource.data.qrToken).issuedAt
+          + duration.value(tokenData(request.resource.data.qrToken).validitySeconds, 's');
+      allow update: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'syncStatus', 'syncedAt', 'syncError'
+        ]);
+      allow delete: if false;
+    }
+
+    // Desktop uses collectionGroup('checkIns') to count and sync attendance.
+    // Collection-group queries need a recursive wildcard rule because they can
+    // target a checkIns collection at any document depth.
+    match /{path=**}/checkIns/{userId} {
+      allow list: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid;
+      allow update: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'syncStatus', 'syncedAt', 'syncError'
+        ]);
     }
 
     match /{document=**} {

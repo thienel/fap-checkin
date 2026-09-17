@@ -1,73 +1,24 @@
-# FAP Check Attendance
+# FAP Check Attendance — Firebase Spark
 
-Ứng dụng điểm danh gồm ba phần:
+Ứng dụng chạy hoàn toàn không cần Cloud Functions và dùng được với Firebase Spark:
 
-- Flutter Desktop: tạo môn–lớp, tìm slot hôm nay, bắt đầu/ngừng phiên và hiển thị QR xoay vòng.
-- Firebase Hosting: trang di động để sinh viên đăng nhập Google.
-- Cloud Functions + Firestore: xác thực hạn QR bằng thời gian máy chủ, chống trùng và đồng bộ Google Sheets.
+- Flutter Desktop điều khiển môn–lớp, phiên điểm danh và QR xoay vòng.
+- Firebase Hosting phục vụ trang sinh viên đăng nhập Google.
+- Firestore lưu lịch, phiên, QR và lượt điểm danh. Security Rules dùng thời gian máy chủ để kiểm tra hạn QR.
+- Google Apps Script nhận các lượt hợp lệ từ desktop và ghi vào Google Sheets.
 
-Mỗi tab Google Sheets có tên `<MÔN>_<LỚP>`, ví dụ `PRM393_SE1910`. Dòng dữ liệu được sắp theo `Slot → Date → Check-in time` khi giảng viên ngừng phiên.
+Mỗi tab Google Sheets có tên `<MÔN>_<LỚP>`, ví dụ `PRM393_SE1910`. Dữ liệu được sắp theo `Slot → Date → Check-in time` khi ngừng phiên.
 
-## 1. Yêu cầu
+## 1. Cấu hình Firebase
 
-- Flutter stable.
-- Node.js 22 để khớp runtime Cloud Functions.
-- Một Firebase project có Firestore database.
-- Một Google Spreadsheet.
-- Firebase CLI (`npm install -g firebase-tools`) hoặc chạy bằng `npx firebase-tools`.
+Trong [Firebase Console](https://console.firebase.google.com/):
 
-## 2. Cấu hình Firebase
-
-Trong Firebase Console:
-
-1. Bật Authentication → Sign-in method → **Google** và **Email/Password**.
-2. Tạo Firestore database.
-3. Thêm một Firebase Web App cho `web-checkin`.
-4. Thêm ứng dụng macOS/Windows tương ứng với desktop app.
-5. Trong Google Cloud Console, bật **Google Sheets API**.
-
-Sao chép file project alias:
-
-```bash
-cp .firebaserc.example .firebaserc
-```
-
-Thay `YOUR_FIREBASE_PROJECT_ID` trong `.firebaserc`.
-
-## 3. Cấu hình trang check-in
-
-```bash
-cp web-checkin/.env.example web-checkin/.env
-```
-
-Điền các giá trị của Firebase Web App vào `web-checkin/.env`.
-
-## 4. Cấu hình Cloud Functions và Google Sheets
-
-Tạo `functions/.env.<project-id>`:
-
-```dotenv
-GOOGLE_SHEETS_ID=id-lấy-từ-url-google-sheet
-PUBLIC_WEB_URL=https://<project-id>.web.app
-```
-
-Ví dụ spreadsheet URL là:
-
-```text
-https://docs.google.com/spreadsheets/d/1AbCdEf.../edit
-```
-
-thì `GOOGLE_SHEETS_ID` là `1AbCdEf...`.
-
-Cloud Functions Gen 2 ghi Sheets bằng runtime service account. Sau lần deploy đầu, mở function trong Google Cloud Console, xem **Runtime service account**, rồi chia sẻ spreadsheet cho email đó với quyền Editor.
-
-Không đưa service-account JSON vào Flutter app hoặc repository.
-
-## 5. Tạo tài khoản giảng viên
-
-1. Firebase Console → Authentication → Users → Add user bằng email/password.
-2. Sao chép UID của user.
-3. Tạo document Firestore `teachers/<UID>` với dữ liệu:
+1. Chọn project `fap-checkin`.
+2. Authentication → Sign-in method: bật **Google** và **Email/Password**.
+3. Firestore Database → Create database. Chọn location gần người dùng, ví dụ Singapore.
+4. Project settings → Your apps → tạo một **Web App**, rồi điền cấu hình đó vào `web-checkin/.env`.
+5. Tạo tài khoản giảng viên ở Authentication → Users → Add user.
+6. Lấy UID của tài khoản vừa tạo và thêm document `teachers/<UID>` trong Firestore:
 
 ```json
 {
@@ -75,41 +26,99 @@ Không đưa service-account JSON vào Flutter app hoặc repository.
 }
 ```
 
-Chỉ tài khoản có document này mới được tạo môn–lớp hoặc điều khiển điểm danh.
-
-## 6. Cài đặt và deploy
+Đăng nhập Firebase CLI bằng đúng Google account sở hữu project:
 
 ```bash
-flutter pub get
-npm --prefix functions install
-npm --prefix web-checkin install
-npx firebase-tools login
-npx firebase-tools deploy --only firestore,functions,hosting
+firebase login
+firebase use fap-checkin
+firebase projects:list
 ```
 
-Sau deploy, URL check-in cố định là:
+## 2. Cấu hình trang check-in
 
-```text
-https://<project-id>.web.app/check-in?t=<QR_TOKEN>
+```bash
+cp web-checkin/.env.example web-checkin/.env
 ```
 
-## 7. Chạy Flutter Desktop
+Điền các giá trị Firebase Web App vào `web-checkin/.env`. Đây là cấu hình public của Firebase client, không phải service-account secret.
+
+## 3. Tạo Google Apps Script để ghi Sheets
+
+1. Tạo một Google Spreadsheet và lấy ID nằm giữa `/d/` và `/edit` trong URL.
+2. Mở [script.google.com](https://script.google.com/) → **New project**.
+3. Sao chép nội dung `apps-script/Code.gs` trong repository vào file `Code.gs` của project.
+4. Project Settings → Script Properties → thêm:
+   - `SPREADSHEET_ID`: ID của Google Spreadsheet.
+   - `SYNC_SECRET`: một chuỗi ngẫu nhiên dài, ví dụ tạo bằng `openssl rand -hex 32`.
+5. Deploy → New deployment → loại **Web app**:
+   - Execute as: **Me**.
+   - Who has access: **Anyone**.
+6. Authorize quyền Google Sheets và sao chép URL kết thúc bằng `/exec`.
+
+Apps Script chỉ nhận request có `SYNC_SECRET`. Với bản MVP chạy trên máy giảng viên, secret được đóng gói trong cấu hình desktop; không nên phát hành file cấu hình này công khai.
+
+## 4. Cấu hình Flutter Desktop
 
 ```bash
 cp firebase.desktop.example.json firebase.desktop.json
 ```
 
-Điền cấu hình ứng dụng desktop, sau đó chạy:
+Điền cấu hình Firebase desktop cùng ba giá trị sau:
+
+```json
+{
+  "PUBLIC_WEB_URL": "https://fap-checkin.web.app",
+  "APPS_SCRIPT_URL": "https://script.google.com/macros/s/.../exec",
+  "APPS_SCRIPT_SECRET": "giống-SYNC_SECRET-trong-Apps-Script"
+}
+```
+
+`firebase.desktop.json`, `web-checkin/.env` và các secret không được commit lên Git.
+
+## 5. Cài đặt và deploy trên Spark
+
+```bash
+flutter pub get
+npm --prefix web-checkin install
+firebase deploy --only firestore,hosting
+```
+
+Không chạy `--only functions` vì Cloud Functions cần Blaze. `firebase.json` hiện không còn cấu hình deploy Functions; thư mục `functions/` chỉ được giữ làm mã legacy để đối chiếu và có thể xóa sau.
+
+URL check-in cố định:
+
+```text
+https://fap-checkin.web.app/check-in?t=<QR_TOKEN>
+```
+
+## 6. Chạy desktop
+
+macOS:
 
 ```bash
 flutter run -d macos --dart-define-from-file=firebase.desktop.json
 ```
 
-Hoặc trên Windows:
+Firebase Auth trên macOS cần **Keychain Sharing** và chữ ký Apple Development.
+Project hiện dùng Personal Team trong `macos/Runner/Configs/AppInfo.xcconfig`.
+Nếu chạy trên một máy/Xcode account khác, thay `DEVELOPMENT_TEAM` bằng Team ID
+của tài khoản đang đăng nhập trong Xcode trước khi build.
+
+Windows:
 
 ```powershell
 flutter run -d windows --dart-define-from-file=firebase.desktop.json
 ```
+
+Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore nhưng sẽ hiển thị cảnh báo rằng Google Sheets chưa được đồng bộ. Khi cấu hình xong và mở lại app, tối đa 100 bản ghi pending/error sẽ được thử gửi lại mỗi lần khởi động.
+
+## Quy tắc bảo mật và dữ liệu
+
+- Thời hạn QR được tính từ `serverTimestamp()` của Firestore, không tin đồng hồ điện thoại hay desktop.
+- Security Rules từ chối đọc QR sau thời hạn và từ chối ghi khi session đã dừng.
+- Document check-in có đường dẫn `attendance/<môn-lớp>/slots/<slot>/checkIns/<firebase-uid>`, nên một tài khoản Google chỉ được ghi lần đầu cho cùng môn–lớp–slot.
+- Apps Script kiểm tra `Record ID` trước khi append, nên retry không tạo dòng trùng trong Google Sheets.
+- Firestore là dữ liệu gốc. Google Sheets là bản đồng bộ do desktop thực hiện khi máy đang mở.
 
 ## Quy tắc lịch
 
@@ -124,13 +133,6 @@ flutter run -d windows --dart-define-from-file=firebase.desktop.json
 ```bash
 flutter analyze
 flutter test
-npm --prefix functions test
 npm --prefix web-checkin run build
+firebase emulators:exec --only firestore "true"
 ```
-
-## Ghi chú vận hành
-
-- Backend dùng thời gian Cloud Functions để kiểm tra hạn QR, không tin thời gian trên điện thoại hoặc desktop.
-- Một email chỉ được ghi lần đầu cho cùng `môn–lớp–slot`.
-- Nhấn **Ngừng điểm danh** làm toàn bộ QR của session mất hiệu lực ngay.
-- Nếu Google Sheets tạm lỗi, lượt điểm danh vẫn được giữ trong Firestore và job định kỳ sẽ thử đồng bộ lại.

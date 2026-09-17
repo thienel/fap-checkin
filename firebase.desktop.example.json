@@ -4,5 +4,8 @@
   "FIREBASE_MESSAGING_SENDER_ID": "000000000000",
   "FIREBASE_PROJECT_ID": "your-project-id",
   "FIREBASE_STORAGE_BUCKET": "your-project-id.firebasestorage.app",
-  "FIREBASE_IOS_BUNDLE_ID": "com.example.fapCheckAttendance"
+  "FIREBASE_IOS_BUNDLE_ID": "com.example.fapCheckAttendance",
+  "PUBLIC_WEB_URL": "https://your-project-id.web.app",
+  "APPS_SCRIPT_URL": "https://script.google.com/macros/s/your-deployment-id/exec",
+  "APPS_SCRIPT_SECRET": "replace-with-a-long-random-secret"
 }

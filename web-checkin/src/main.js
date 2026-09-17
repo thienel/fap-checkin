@@ -8,7 +8,12 @@ import {
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import {
+  doc,
+  getFirestore,
+  runTransaction,
+  serverTimestamp,
+} from 'firebase/firestore';
 import './style.css';
 
 const firebaseConfig = {
@@ -30,7 +35,7 @@ if (urlToken) sessionStorage.setItem('attendanceQrToken', urlToken);
 const token = urlToken || sessionStorage.getItem('attendanceQrToken');
 
 let auth;
-let functions;
+let db;
 let submitStarted = false;
 
 function showStatus(kind, heading, detail) {
@@ -43,10 +48,10 @@ function showStatus(kind, heading, detail) {
 
 function readableError(error) {
   const code = String(error?.code || '');
-  if (code.includes('deadline-exceeded')) return 'Mã QR đã hết hạn. Hãy quay lại và quét mã mới.';
   if (code.includes('not-found')) return 'Mã QR không hợp lệ.';
-  if (code.includes('failed-precondition')) return 'Phiên điểm danh đã kết thúc.';
-  if (code.includes('permission-denied')) return 'Bạn cần đăng nhập bằng tài khoản Google.';
+  if (code.includes('permission-denied')) {
+    return 'Mã QR đã hết hạn, không hợp lệ hoặc phiên điểm danh đã kết thúc.';
+  }
   return 'Không thể hoàn tất điểm danh. Vui lòng quét lại mã QR.';
 }
 
@@ -56,14 +61,56 @@ async function submitCheckIn(user) {
   showStatus('loading', 'Đang xác nhận…', `Đang kiểm tra ${user.email ?? 'tài khoản Google'}.`);
 
   try {
-    const checkIn = httpsCallable(functions, 'checkIn');
-    const result = await checkIn({ token });
-    const data = result.data;
+    const email = user.email;
+    if (!email) throw new Error('google-account-has-no-email');
+
+    const result = await runTransaction(db, async (transaction) => {
+      const tokenReference = doc(db, 'qrTokens', token);
+      const tokenSnapshot = await transaction.get(tokenReference);
+      if (!tokenSnapshot.exists()) throw new Error('qr-not-found');
+
+      const tokenData = tokenSnapshot.data();
+      const sessionReference = doc(db, 'attendanceSessions', tokenData.sessionId);
+      const sessionSnapshot = await transaction.get(sessionReference);
+      if (!sessionSnapshot.exists()) throw new Error('session-not-found');
+
+      const session = sessionSnapshot.data();
+      const checkInReference = doc(
+        db,
+        'attendance',
+        session.courseClassId,
+        'slots',
+        session.slotKey,
+        'checkIns',
+        user.uid,
+      );
+      const existing = await transaction.get(checkInReference);
+      if (existing.exists()) return { status: 'duplicate', email };
+
+      transaction.set(checkInReference, {
+        ownerUid: session.ownerUid,
+        firebaseUid: user.uid,
+        email,
+        sessionId: sessionSnapshot.id,
+        courseClassId: session.courseClassId,
+        subject: session.subject,
+        classCode: session.classCode,
+        slot: session.slot,
+        slotKey: session.slotKey,
+        date: session.date,
+        qrToken: token,
+        checkedInAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        syncStatus: 'pending',
+      });
+      return { status: 'valid', email };
+    });
+
     sessionStorage.removeItem('attendanceQrToken');
-    if (data.status === 'duplicate') {
-      showStatus('success', 'Bạn đã điểm danh', `${data.email} đã được ghi nhận trước đó cho slot này.`);
+    if (result.status === 'duplicate') {
+      showStatus('success', 'Bạn đã điểm danh', `${result.email} đã được ghi nhận trước đó cho slot này.`);
     } else {
-      showStatus('success', 'Điểm danh thành công', `${data.email} đã được ghi nhận.`);
+      showStatus('success', 'Điểm danh thành công', `${result.email} đã được ghi nhận.`);
     }
     await signOut(auth);
   } catch (error) {
@@ -86,7 +133,7 @@ async function bootstrap() {
 
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
-  functions = getFunctions(app, 'asia-southeast1');
+  db = getFirestore(app);
   await setPersistence(auth, browserSessionPersistence);
 
   onAuthStateChanged(auth, (user) => {
