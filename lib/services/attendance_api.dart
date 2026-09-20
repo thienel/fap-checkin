@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../domain/models.dart';
+import '../domain/roster_import.dart';
 import '../domain/schedule.dart';
 import '../firebase_options.dart';
 import 'apps_script_sheet_service.dart';
@@ -26,6 +28,113 @@ class AttendanceApi {
   final Set<String> _syncingRecords = {};
 
   bool get isSheetSyncConfigured => _sheets.isConfigured;
+
+  Future<List<CourseClassSummary>> getCourseClasses() => _guard(() async {
+    final uid = _teacherUid();
+    final snapshot = await _firestore
+        .collection('courseClasses')
+        .where('ownerUid', isEqualTo: uid)
+        .get();
+    final classes = snapshot.docs.map((document) {
+      final data = document.data();
+      return CourseClassSummary(
+        id: document.id,
+        subject: data['subject'] as String? ?? '',
+        classCode: data['classCode'] as String? ?? '',
+      );
+    }).toList();
+    classes.sort((left, right) => left.label.compareTo(right.label));
+    return classes;
+  });
+
+  Future<RosterImportResult> importRoster({
+    required String courseClassId,
+    required String fileName,
+    required List<RosterRow> rows,
+    required RosterImportMode mode,
+    void Function(int completed, int total)? onProgress,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final course = await courseReference.get();
+    if (!course.exists || course.data()?['ownerUid'] != uid) {
+      throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+    }
+
+    final validRows = rows.where((row) => row.isValid).toList();
+    final students = courseReference.collection('students');
+    final existingSnapshot = await students.get();
+    final existing = {
+      for (final doc in existingSnapshot.docs) doc.id: doc.data(),
+    };
+    var completed = 0;
+    final totalWrites =
+        validRows.length +
+        (mode == RosterImportMode.replaceInactive ? existing.length : 0);
+
+    Future<void> commitChunks(
+      List<void Function(WriteBatch)> operations,
+    ) async {
+      for (var start = 0; start < operations.length; start += 400) {
+        final batch = _firestore.batch();
+        final end = min(start + 400, operations.length);
+        for (var index = start; index < end; index++) {
+          operations[index](batch);
+        }
+        await batch.commit();
+        completed += end - start;
+        onProgress?.call(completed, totalWrites);
+      }
+    }
+
+    if (mode == RosterImportMode.replaceInactive && existing.isNotEmpty) {
+      await commitChunks([
+        for (final document in existingSnapshot.docs)
+          (batch) => batch.update(document.reference, {
+            'active': false,
+            'updatedAt': FieldValue.serverTimestamp(),
+            'updatedBy': uid,
+          }),
+      ]);
+    }
+
+    await commitChunks([
+      for (final row in validRows)
+        (batch) {
+          final studentId = sha256
+              .convert(utf8.encode(row.emailNormalized))
+              .toString();
+          final previous = existing[studentId];
+          batch.set(students.doc(studentId), {
+            'emailNormalized': row.emailNormalized,
+            'email': row.email.trim(),
+            'studentCode': row.studentCode.trim(),
+            'fullName': row.fullName.trim(),
+            'attendancePolicy': previous?['attendancePolicy'] ?? 'normal',
+            'active': true,
+            'importedAt': FieldValue.serverTimestamp(),
+            'importedBy': uid,
+          }, SetOptions(merge: true));
+        },
+    ]);
+
+    await courseReference.collection('imports').add({
+      'fileName': fileName,
+      'totalRows': rows.length,
+      'validRows': validRows.length,
+      'invalidRows': rows.length - validRows.length,
+      'mode': mode.name,
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': uid,
+    });
+    return RosterImportResult(
+      totalRows: rows.length,
+      validRows: validRows.length,
+      invalidRows: rows.length - validRows.length,
+    );
+  });
 
   Future<void> createCourseClass({
     required String subject,

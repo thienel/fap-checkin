@@ -80,3 +80,29 @@ class IssuedQr {
   final String url;
   final DateTime expiresAt;
 }
+
+class CourseClassSummary {
+  const CourseClassSummary({
+    required this.id,
+    required this.subject,
+    required this.classCode,
+  });
+
+  final String id;
+  final String subject;
+  final String classCode;
+
+  String get label => '$subject · $classCode';
+}
+
+class RosterImportResult {
+  const RosterImportResult({
+    required this.totalRows,
+    required this.validRows,
+    required this.invalidRows,
+  });
+
+  final int totalRows;
+  final int validRows;
+  final int invalidRows;
+}

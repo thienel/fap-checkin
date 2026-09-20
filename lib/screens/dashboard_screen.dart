@@ -10,6 +10,7 @@ import '../domain/schedule.dart';
 import '../services/attendance_api.dart';
 import '../widgets/create_course_dialog.dart';
 import 'session_screen.dart';
+import 'roster_import_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.api, required this.user});
@@ -25,6 +26,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late Future<List<TodaySlot>> _slots;
   late Future<AttendanceSession?> _activeSession;
   bool _showWeek = false;
+  bool _showRoster = false;
   late DateTime _weekStart;
 
   @override
@@ -55,7 +57,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _selectScheduleView(bool showWeek) {
-    if (_showWeek == showWeek) return;
+    if (!_showRoster && _showWeek == showWeek) return;
+    _showRoster = false;
     _showWeek = showWeek;
     if (showWeek) _weekStart = startOfWeek(DateTime.now());
     _refresh();
@@ -456,15 +459,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _SideItem(
                   icon: Icons.today_outlined,
                   label: 'Lịch hôm nay',
-                  selected: !_showWeek,
+                  selected: !_showRoster && !_showWeek,
                   onTap: () => _selectScheduleView(false),
                 ),
                 const SizedBox(height: 8),
                 _SideItem(
                   icon: Icons.date_range_outlined,
                   label: 'Lịch trong tuần',
-                  selected: _showWeek,
+                  selected: !_showRoster && _showWeek,
                   onTap: () => _selectScheduleView(true),
+                ),
+                const SizedBox(height: 8),
+                _SideItem(
+                  icon: Icons.groups_outlined,
+                  label: 'Danh sách sinh viên',
+                  selected: _showRoster,
+                  onTap: () => setState(() => _showRoster = true),
                 ),
                 const Spacer(),
                 Text(
@@ -487,203 +497,217 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(36),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+            child: _showRoster
+                ? RosterImportScreen(api: widget.api)
+                : Padding(
+                    padding: const EdgeInsets.all(36),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                           children: [
-                            Text(
-                              _showWeek ? 'Lịch trong tuần' : 'Lịch hôm nay',
-                              style: Theme.of(context).textTheme.headlineMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _showWeek
+                                        ? 'Lịch trong tuần'
+                                        : 'Lịch hôm nay',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .headlineMedium
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _showWeek
+                                        ? '${DateFormat('dd/MM/yyyy').format(_weekStart)} – '
+                                              '${DateFormat('dd/MM/yyyy').format(endOfWeek(_weekStart))}'
+                                        : 'Hôm nay, ${DateFormat('dd/MM/yyyy').format(DateTime.now())}',
+                                  ),
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _showWeek
-                                  ? '${DateFormat('dd/MM/yyyy').format(_weekStart)} – '
-                                        '${DateFormat('dd/MM/yyyy').format(endOfWeek(_weekStart))}'
-                                  : 'Hôm nay, ${DateFormat('dd/MM/yyyy').format(DateTime.now())}',
+                            if (_showWeek) ...[
+                              IconButton(
+                                tooltip: 'Tuần trước',
+                                onPressed: () => _changeWeek(-1),
+                                icon: const Icon(Icons.chevron_left),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  _weekStart = startOfWeek(DateTime.now());
+                                  _refresh();
+                                },
+                                child: const Text('Tuần này'),
+                              ),
+                              IconButton(
+                                tooltip: 'Tuần sau',
+                                onPressed: () => _changeWeek(1),
+                                icon: const Icon(Icons.chevron_right),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
+                            IconButton(
+                              tooltip: 'Làm mới',
+                              onPressed: _refresh,
+                              icon: const Icon(Icons.refresh),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton.filledTonal(
+                              tooltip: 'Tạo lịch TEST cho hôm nay',
+                              onPressed: _createTestScheduleNow,
+                              icon: const Icon(Icons.science_outlined),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton.icon(
+                              onPressed: _createCourse,
+                              icon: const Icon(Icons.add),
+                              label: const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 12),
+                                child: Text('Tạo môn–lớp'),
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                      if (_showWeek) ...[
-                        IconButton(
-                          tooltip: 'Tuần trước',
-                          onPressed: () => _changeWeek(-1),
-                          icon: const Icon(Icons.chevron_left),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            _weekStart = startOfWeek(DateTime.now());
-                            _refresh();
-                          },
-                          child: const Text('Tuần này'),
-                        ),
-                        IconButton(
-                          tooltip: 'Tuần sau',
-                          onPressed: () => _changeWeek(1),
-                          icon: const Icon(Icons.chevron_right),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      IconButton(
-                        tooltip: 'Làm mới',
-                        onPressed: _refresh,
-                        icon: const Icon(Icons.refresh),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton.filledTonal(
-                        tooltip: 'Tạo lịch TEST cho hôm nay',
-                        onPressed: _createTestScheduleNow,
-                        icon: const Icon(Icons.science_outlined),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton.icon(
-                        onPressed: _createCourse,
-                        icon: const Icon(Icons.add),
-                        label: const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12),
-                          child: Text('Tạo môn–lớp'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 28),
-                  if (!widget.api.isSheetSyncConfigured) ...[
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 18),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF4D6),
-                        border: Border.all(color: const Color(0xFFE8C66A)),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.info_outline, color: Color(0xFF805D00)),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Chưa cấu hình Apps Script: lượt điểm danh vẫn lưu '
-                              'trong Firestore nhưng chưa được chép sang Google Sheets.',
+                        const SizedBox(height: 28),
+                        if (!widget.api.isSheetSyncConfigured) ...[
+                          Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 18),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF4D6),
+                              border: Border.all(
+                                color: const Color(0xFFE8C66A),
+                              ),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  color: Color(0xFF805D00),
+                                ),
+                                SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'Chưa cấu hình Apps Script: lượt điểm danh vẫn lưu '
+                                    'trong Firestore nhưng chưa được chép sang Google Sheets.',
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
-                      ),
-                    ),
-                  ],
-                  FutureBuilder<AttendanceSession?>(
-                    future: _activeSession,
-                    builder: (context, snapshot) {
-                      final session = snapshot.data;
-                      if (session == null) return const SizedBox.shrink();
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 18),
-                        child: Container(
-                          padding: const EdgeInsets.all(18),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE4F4EE),
-                            border: Border.all(color: const Color(0xFF94CEB8)),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.radio_button_checked,
-                                color: Color(0xFF167052),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                        FutureBuilder<AttendanceSession?>(
+                          future: _activeSession,
+                          builder: (context, snapshot) {
+                            final session = snapshot.data;
+                            if (session == null) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 18),
+                              child: Container(
+                                padding: const EdgeInsets.all(18),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE4F4EE),
+                                  border: Border.all(
+                                    color: const Color(0xFF94CEB8),
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
                                   children: [
-                                    const Text(
-                                      'Phiên điểm danh đang hoạt động',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w700,
+                                    const Icon(
+                                      Icons.radio_button_checked,
+                                      color: Color(0xFF167052),
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'Phiên điểm danh đang hoạt động',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          Text(
+                                            '${session.subject} · ${session.classCode} · '
+                                            'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''}'
+                                            '${session.daySlot == null ? '' : ' · Slot ${session.daySlot} trong ngày'}',
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                    Text(
-                                      '${session.subject} · ${session.classCode} · '
-                                      'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''}'
-                                      '${session.daySlot == null ? '' : ' · Slot ${session.daySlot} trong ngày'}',
+                                    FilledButton.tonalIcon(
+                                      onPressed: () async {
+                                        await Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) => SessionScreen(
+                                              api: widget.api,
+                                              session: session,
+                                            ),
+                                          ),
+                                        );
+                                        if (mounted) _refresh();
+                                      },
+                                      icon: const Icon(Icons.open_in_new),
+                                      label: const Text('Mở lại phiên'),
                                     ),
                                   ],
                                 ),
                               ),
-                              FilledButton.tonalIcon(
-                                onPressed: () async {
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute<void>(
-                                      builder: (_) => SessionScreen(
-                                        api: widget.api,
-                                        session: session,
-                                      ),
-                                    ),
-                                  );
-                                  if (mounted) _refresh();
-                                },
-                                icon: const Icon(Icons.open_in_new),
-                                label: const Text('Mở lại phiên'),
-                              ),
-                            ],
+                            );
+                          },
+                        ),
+                        Expanded(
+                          child: FutureBuilder<List<TodaySlot>>(
+                            future: _slots,
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState ==
+                                  ConnectionState.waiting) {
+                                return const Center(
+                                  child: CircularProgressIndicator(),
+                                );
+                              }
+                              if (snapshot.hasError) {
+                                return _EmptyState(
+                                  icon: Icons.cloud_off_outlined,
+                                  title: 'Không tải được lịch',
+                                  subtitle: '${snapshot.error}',
+                                  action: TextButton.icon(
+                                    onPressed: _refresh,
+                                    icon: const Icon(Icons.refresh),
+                                    label: const Text('Thử lại'),
+                                  ),
+                                );
+                              }
+                              final slots = snapshot.data ?? [];
+                              if (slots.isEmpty) {
+                                return _EmptyState(
+                                  icon: Icons.event_available_outlined,
+                                  title: _showWeek
+                                      ? 'Tuần này chưa có slot nào'
+                                      : 'Hôm nay chưa có slot nào',
+                                  subtitle: 'Tạo môn–lớp mới hoặc kiểm tra lại ngày bắt đầu.',
+                                  action: FilledButton.icon(
+                                    onPressed: _createCourse,
+                                    icon: const Icon(Icons.add),
+                                    label: const Text('Tạo môn–lớp'),
+                                  ),
+                                );
+                              }
+                              return _buildScheduleList(slots);
+                            },
                           ),
                         ),
-                      );
-                    },
-                  ),
-                  Expanded(
-                    child: FutureBuilder<List<TodaySlot>>(
-                      future: _slots,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
-                          );
-                        }
-                        if (snapshot.hasError) {
-                          return _EmptyState(
-                            icon: Icons.cloud_off_outlined,
-                            title: 'Không tải được lịch',
-                            subtitle: '${snapshot.error}',
-                            action: TextButton.icon(
-                              onPressed: _refresh,
-                              icon: const Icon(Icons.refresh),
-                              label: const Text('Thử lại'),
-                            ),
-                          );
-                        }
-                        final slots = snapshot.data ?? [];
-                        if (slots.isEmpty) {
-                          return _EmptyState(
-                            icon: Icons.event_available_outlined,
-                            title: _showWeek
-                                ? 'Tuần này chưa có slot nào'
-                                : 'Hôm nay chưa có slot nào',
-                            subtitle: 'Tạo môn–lớp mới hoặc kiểm tra lại ngày bắt đầu.',
-                            action: FilledButton.icon(
-                              onPressed: _createCourse,
-                              icon: const Icon(Icons.add),
-                              label: const Text('Tạo môn–lớp'),
-                            ),
-                          );
-                        }
-                        return _buildScheduleList(slots);
-                      },
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ),
           ),
         ],
       ),

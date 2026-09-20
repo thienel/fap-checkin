@@ -29,6 +29,10 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/qrTokens/$(token)).data;
     }
 
+    function studentData(courseClassId, studentId) {
+      return get(/databases/$(database)/documents/courseClasses/$(courseClassId)/students/$(studentId)).data;
+    }
+
     match /teachers/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
       allow list, create, update, delete: if false;
@@ -55,6 +59,41 @@ service cloud.firestore {
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid;
       allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+
+      match /students/{studentId} {
+        // A Google user may only perform a direct lookup. IDs are SHA-256 hashes
+        // of normalized emails; collection listing remains forbidden.
+        allow get: if isGoogleUser()
+          || (isTeacher()
+            && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+              == request.auth.uid);
+        allow list: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid;
+        allow create, update: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid
+          && request.resource.data.emailNormalized is string
+          && request.resource.data.email is string
+          && request.resource.data.studentCode is string
+          && request.resource.data.fullName is string
+          && request.resource.data.active is bool
+          && request.resource.data.attendancePolicy in ['normal', 'alwaysExcused']
+          && request.resource.data.importedBy == request.auth.uid;
+        allow delete: if false;
+      }
+
+      match /imports/{importId} {
+        allow read: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid;
+        allow create: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
     }
 
     match /activeAttendanceSessions/{uid} {
@@ -123,12 +162,21 @@ service cloud.firestore {
       allow create: if isGoogleUser()
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
-          'ownerUid', 'firebaseUid', 'email', 'sessionId', 'courseClassId',
+          'ownerUid', 'firebaseUid', 'studentId', 'email', 'emailNormalized',
+          'studentCode', 'fullName', 'sessionId', 'courseClassId',
           'subject', 'classCode', 'slot', 'slotKey', 'date', 'qrToken',
           'checkedInAt', 'createdAt', 'syncStatus'
         ])
         && request.resource.data.firebaseUid == request.auth.uid
         && request.resource.data.email == request.auth.token.email
+        && studentData(courseClassId, request.resource.data.studentId).active == true
+        && studentData(courseClassId, request.resource.data.studentId).emailNormalized
+          == request.resource.data.emailNormalized
+        && request.resource.data.emailNormalized == request.auth.token.email
+        && request.resource.data.studentCode
+          == studentData(courseClassId, request.resource.data.studentId).studentCode
+        && request.resource.data.fullName
+          == studentData(courseClassId, request.resource.data.studentId).fullName
         && request.resource.data.courseClassId == courseClassId
         && request.resource.data.slotKey == slotKey
         && request.resource.data.checkedInAt == request.time

@@ -33,17 +33,28 @@ class _LoginScreenState extends State<LoginScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
-    } on FirebaseAuthException catch (error) {
+    } on FirebaseAuthException catch (error, stack) {
+      debugPrint('LOGIN FirebaseAuthException: code=${error.code}, message=${error.message}, plugin=${error.plugin}\n$stack');
       setState(
         () => _error = switch (error.code) {
-          'invalid-credential' => 'Email hoặc mật khẩu không đúng.',
-          'too-many-requests' => 'Thử lại sau vì có quá nhiều lần đăng nhập.',
+          'invalid-credential' => 'Email hoặc mật khẩu không đúng. [invalid-credential]',
+          'user-not-found' => 'Tài khoản email này chưa được tạo trong Firebase Auth. [user-not-found]',
+          'wrong-password' => 'Mật khẩu không đúng. [wrong-password]',
+          'invalid-email' => 'Địa chỉ email không hợp lệ. [invalid-email]',
+          'user-disabled' => 'Tài khoản đã bị vô hiệu hóa. [user-disabled]',
+          'too-many-requests' => 'Thử lại sau vì có quá nhiều lần đăng nhập. [too-many-requests]',
           'keychain-error' =>
             'macOS chưa cấp quyền Keychain cho ứng dụng. Hãy kiểm tra '
                 'Keychain Sharing và cấu hình ký ứng dụng.',
-          _ => error.message ?? 'Không thể đăng nhập.',
+          'internal-error' =>
+            'Lỗi nội bộ Firebase (Internal error). Vui lòng kiểm tra Email/Password Sign-in method đã bật trong Firebase Console chưa.',
+          'channel-error' => 'Vui lòng nhập đầy đủ email và mật khẩu.',
+          _ => '[${error.code}] ${error.message ?? 'Không thể đăng nhập.'}',
         },
       );
+    } catch (error, stack) {
+      debugPrint('LOGIN Generic Exception: $error\n$stack');
+      setState(() => _error = 'Lỗi không xác định: $error');
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
