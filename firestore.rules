@@ -33,6 +33,12 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/courseClasses/$(courseClassId)/students/$(studentId)).data;
     }
 
+    function ownsCourse(courseClassId) {
+      return isTeacher()
+        && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+          == request.auth.uid;
+    }
+
     match /teachers/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
       allow list, create, update, delete: if false;
@@ -157,8 +163,11 @@ service cloud.firestore {
     match /attendance/{courseClassId}/slots/{slotKey}/checkIns/{userId} {
       allow get: if signedIn()
         && (request.auth.uid == userId
-          || (isTeacher() && resource.data.ownerUid == request.auth.uid));
-      allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+          || ownsCourse(courseClassId));
+      // The course ID is fixed by this collection path, so ownership can be
+      // proven from the parent course without constraining every teacher query
+      // by a record field. This enables slot overview and realtime roster reads.
+      allow list: if ownsCourse(courseClassId);
       allow create: if isGoogleUser()
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([

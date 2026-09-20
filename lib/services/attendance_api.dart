@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../domain/models.dart';
+import '../domain/class_overview.dart';
 import '../domain/roster_import.dart';
 import '../domain/schedule.dart';
 import '../firebase_options.dart';
@@ -45,6 +46,152 @@ class AttendanceApi {
     }).toList();
     classes.sort((left, right) => left.label.compareTo(right.label));
     return classes;
+  });
+
+  Future<CourseOverview> getCourseOverview(
+    String courseClassId,
+  ) => _guard(() async {
+    final uid = _teacherUid();
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final courseDocument = await courseReference.get();
+    final course = courseDocument.data();
+    if (!courseDocument.exists || course == null || course['ownerUid'] != uid) {
+      throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+    }
+
+    final studentSnapshot = await courseReference.collection('students').get();
+    final students =
+        studentSnapshot.docs.map((document) {
+          final data = document.data();
+          return CourseStudent(
+            id: document.id,
+            email: data['email'] as String? ?? '',
+            studentCode: data['studentCode'] as String? ?? '',
+            fullName: data['fullName'] as String? ?? '',
+            active: data['active'] as bool? ?? true,
+          );
+        }).toList()..sort(
+          (left, right) => left.displayName.compareTo(right.displayName),
+        );
+
+    final sessionSnapshot = await _firestore
+        .collection('attendanceSessions')
+        .where('ownerUid', isEqualTo: uid)
+        .get();
+    final sessionsBySlot =
+        <int, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+    for (final session in sessionSnapshot.docs) {
+      final data = session.data();
+      if (data['courseClassId'] != courseClassId || data['slot'] is! num) {
+        continue;
+      }
+      sessionsBySlot
+          .putIfAbsent((data['slot'] as num).toInt(), () => [])
+          .add(session);
+    }
+
+    final rawSchedule = course['schedule'];
+    final schedule = rawSchedule is List
+        ? rawSchedule.whereType<Map>().map(Map<String, dynamic>.from).toList()
+        : <Map<String, dynamic>>[];
+    schedule.sort((a, b) => (a['number'] as num).compareTo(b['number'] as num));
+    final slots = <CourseSlotOverview>[];
+    final entrySnapshots = <int, QuerySnapshot<Map<String, dynamic>>>{};
+    await Future.wait([
+      for (final item in schedule)
+        (() async {
+          final number = (item['number'] as num).toInt();
+          entrySnapshots[number] = await _firestore
+              .collection('attendance')
+              .doc(courseClassId)
+              .collection('slots')
+              .doc('$number')
+              .collection('checkIns')
+              .where('ownerUid', isEqualTo: uid)
+              .get();
+        })(),
+    ]);
+    for (final item in schedule) {
+      final number = (item['number'] as num).toInt();
+      final sessions = sessionsBySlot[number] ?? const [];
+      final active = sessions.any((doc) => doc.data()['status'] == 'active');
+      slots.add(
+        CourseSlotOverview(
+          number: number,
+          date: item['date'] as String? ?? '',
+          daySlot: (item['daySlot'] as num?)?.toInt(),
+          state: active
+              ? CourseSlotState.active
+              : sessions.isEmpty
+              ? CourseSlotState.notOpened
+              : CourseSlotState.completed,
+          sessionIds: sessions.map((doc) => doc.id).toList(),
+        ),
+      );
+    }
+
+    final entries = <String, AttendanceEntry>{};
+    for (final slot in slots) {
+      for (final document in entrySnapshots[slot.number]?.docs ?? const []) {
+        final data = document.data();
+        final studentId = data['studentId'] as String?;
+        if (studentId == null) continue;
+        final rawStatus = data['attendanceStatus'] as String? ?? 'present';
+        final source = data['recordSource'] as String? ?? 'qr';
+        final status = switch (rawStatus) {
+          'excused' => AttendanceStatus.excused,
+          'manual' => AttendanceStatus.manual,
+          'absent' => AttendanceStatus.absent,
+          _ when source == 'teacher' => AttendanceStatus.manual,
+          _ => AttendanceStatus.present,
+        };
+        entries[attendanceEntryKey(studentId, slot.number)] = AttendanceEntry(
+          studentId: studentId,
+          slot: slot.number,
+          status: status,
+          source: source,
+          syncStatus: data['syncStatus'] as String? ?? 'pending',
+          checkedInAt: (data['checkedInAt'] as Timestamp?)?.toDate(),
+          sessionId: data['sessionId'] as String?,
+        );
+      }
+    }
+    return CourseOverview(
+      courseClassId: courseClassId,
+      subject: course['subject'] as String? ?? '',
+      classCode: course['classCode'] as String? ?? '',
+      students: students,
+      slots: slots,
+      entries: entries,
+    );
+  });
+
+  Future<StudentAttendanceDetail> getStudentAttendanceDetail({
+    required String courseClassId,
+    required String studentId,
+  }) => _guard(() async {
+    final overview = await getCourseOverview(courseClassId);
+    CourseStudent? student;
+    for (final item in overview.students) {
+      if (item.id == studentId) {
+        student = item;
+        break;
+      }
+    }
+    if (student == null) {
+      throw const AttendanceApiException(
+        'Không tìm thấy sinh viên trong danh sách lớp.',
+      );
+    }
+    return StudentAttendanceDetail(
+      student: student,
+      attendedSlots: overview.attendedCount(student),
+      totalSlots: overview.slots.length,
+      openedSlots: overview.openedSlotCount,
+      excusedSlots: overview.excusedCount(student),
+    );
   });
 
   Future<RosterImportResult> importRoster({
@@ -178,6 +325,7 @@ class AttendanceApi {
 
   Future<void> createTestCourseClassNow() => _guard(() async {
     final uid = _teacherUid();
+    final user = _auth.currentUser!;
     final now = DateTime.now();
     final date = _isoDate(now);
     final classCode = 'DEMO_${date.replaceAll('-', '')}';
@@ -187,7 +335,15 @@ class AttendanceApi {
     final daySlot = closestDaySlot(now);
 
     await _firestore.runTransaction((transaction) async {
-      if ((await transaction.get(reference)).exists) return;
+      final existing = await transaction.get(reference);
+      if (existing.exists) {
+        if (existing.data()?['ownerUid'] != uid) {
+          throw const AttendanceApiException(
+            'Lớp demo hôm nay đã thuộc một giảng viên khác.',
+          );
+        }
+        return;
+      }
       transaction.set(reference, {
         'subject': 'TEST',
         'classCode': classCode,
@@ -201,6 +357,27 @@ class AttendanceApi {
         'createdAt': FieldValue.serverTimestamp(),
       });
     });
+
+    // A generated demo course must be immediately testable. Add the current
+    // teacher email to its roster so the same Google account can scan the QR.
+    // Production courses still require the normal CSV/XLSX roster import.
+    final email = user.email?.trim();
+    if (email != null && email.isNotEmpty) {
+      final emailNormalized = email.toLowerCase();
+      final studentId = sha256.convert(utf8.encode(emailNormalized)).toString();
+      await reference.collection('students').doc(studentId).set({
+        'emailNormalized': emailNormalized,
+        'email': email,
+        'studentCode': 'DEMO',
+        'fullName': user.displayName?.trim().isNotEmpty == true
+            ? user.displayName!.trim()
+            : email.split('@').first,
+        'attendancePolicy': 'normal',
+        'active': true,
+        'importedAt': FieldValue.serverTimestamp(),
+        'importedBy': uid,
+      }, SetOptions(merge: true));
+    }
   });
 
   Future<List<TodaySlot>> getTodaySlots(DateTime date) =>
@@ -498,6 +675,46 @@ class AttendanceApi {
         });
   }
 
+  Stream<List<CheckInRecord>> watchSessionCheckIns(AttendanceSession session) {
+    final uid = _teacherUid();
+    return _firestore
+        .collection('attendance')
+        .doc(session.courseClassId)
+        .collection('slots')
+        .doc('${session.slot}')
+        .collection('checkIns')
+        .where('ownerUid', isEqualTo: uid)
+        .snapshots()
+        .map((snapshot) {
+          if (_sheets.isConfigured) unawaited(_syncDocuments(snapshot.docs));
+          // A student has one immutable check-in document per course slot.
+          // When the teacher reopens the same slot, the web client correctly
+          // reports a duplicate instead of creating a second document. Show
+          // every record in this slot so those earlier valid check-ins do not
+          // disappear merely because the active session ID changed.
+          final records = snapshot.docs.map((document) {
+            final data = document.data();
+            return CheckInRecord(
+              id: document.id,
+              studentId: data['studentId'] as String? ?? '',
+              email: data['email'] as String? ?? '',
+              studentCode: data['studentCode'] as String? ?? '',
+              fullName: data['fullName'] as String? ?? '',
+              syncStatus: data['syncStatus'] as String? ?? 'pending',
+              syncError: data['syncError'] as String?,
+              source: data['recordSource'] as String? ?? 'qr',
+              checkedInAt: (data['checkedInAt'] as Timestamp?)?.toDate(),
+            );
+          }).toList();
+          records.sort(
+            (left, right) => (right.checkedInAt ?? DateTime(0)).compareTo(
+              left.checkedInAt ?? DateTime(0),
+            ),
+          );
+          return records;
+        });
+  }
+
   Future<void> syncPendingCheckIns({String? sessionId}) => _guard(() async {
     if (!_sheets.isConfigured) return;
     final uid = _teacherUid();
@@ -509,15 +726,16 @@ class AttendanceApi {
       query = query.where('sessionId', isEqualTo: sessionId);
     }
     final snapshot = await query.limit(100).get();
-    await _syncDocuments(snapshot.docs);
+    await _syncDocuments(snapshot.docs, retryErrors: true);
   });
 
   Future<void> _syncDocuments(
-    Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> documents,
-  ) async {
+    Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> documents, {
+    bool retryErrors = false,
+  }) async {
     for (final document in documents) {
       final status = document.data()['syncStatus'];
-      if (status == 'pending' || status == 'error') {
+      if (status == 'pending' || (retryErrors && status == 'error')) {
         await _syncDocument(document);
       }
     }

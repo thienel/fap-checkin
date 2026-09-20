@@ -28,4 +28,30 @@ void main() {
 
     expect(methods, ['POST', 'GET']);
   });
+
+  test('reports a missing doPost deployment clearly', () async {
+    final client = MockClient(
+      (_) async => http.Response(
+        '<!DOCTYPE html><div>Không tìm thấy hàm tập lệnh: doPost</div>',
+        200,
+        headers: {'content-type': 'text/html; charset=utf-8'},
+      ),
+    );
+    final service = AppsScriptSheetService(
+      client: client,
+      url: 'https://script.google.com/macros/s/deployment/exec',
+      secret: 'test-secret',
+    );
+
+    expect(
+      () => service.sort(subject: 'PRM393', classCode: 'SE1917'),
+      throwsA(
+        isA<SheetSyncException>().having(
+          (error) => error.message,
+          'message',
+          contains('doPost'),
+        ),
+      ),
+    );
+  });
 }

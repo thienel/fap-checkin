@@ -11,6 +11,7 @@ import '../services/attendance_api.dart';
 import '../widgets/create_course_dialog.dart';
 import 'session_screen.dart';
 import 'roster_import_screen.dart';
+import 'class_overview_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.api, required this.user});
@@ -27,6 +28,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late Future<AttendanceSession?> _activeSession;
   bool _showWeek = false;
   bool _showRoster = false;
+  bool _showOverview = false;
   late DateTime _weekStart;
 
   @override
@@ -57,8 +59,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _selectScheduleView(bool showWeek) {
-    if (!_showRoster && _showWeek == showWeek) return;
+    if (!_showRoster && !_showOverview && _showWeek == showWeek) return;
     _showRoster = false;
+    _showOverview = false;
     _showWeek = showWeek;
     if (showWeek) _weekStart = startOfWeek(DateTime.now());
     _refresh();
@@ -459,22 +462,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _SideItem(
                   icon: Icons.today_outlined,
                   label: 'Lịch hôm nay',
-                  selected: !_showRoster && !_showWeek,
+                  selected: !_showRoster && !_showOverview && !_showWeek,
                   onTap: () => _selectScheduleView(false),
                 ),
                 const SizedBox(height: 8),
                 _SideItem(
                   icon: Icons.date_range_outlined,
                   label: 'Lịch trong tuần',
-                  selected: !_showRoster && _showWeek,
+                  selected: !_showRoster && !_showOverview && _showWeek,
                   onTap: () => _selectScheduleView(true),
+                ),
+                const SizedBox(height: 8),
+                _SideItem(
+                  icon: Icons.analytics_outlined,
+                  label: 'Tổng quan lớp',
+                  selected: _showOverview,
+                  onTap: () => setState(() {
+                    _showOverview = true;
+                    _showRoster = false;
+                  }),
                 ),
                 const SizedBox(height: 8),
                 _SideItem(
                   icon: Icons.groups_outlined,
                   label: 'Danh sách sinh viên',
                   selected: _showRoster,
-                  onTap: () => setState(() => _showRoster = true),
+                  onTap: () => setState(() {
+                    _showRoster = true;
+                    _showOverview = false;
+                  }),
                 ),
                 const Spacer(),
                 Text(
@@ -497,7 +513,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           Expanded(
-            child: _showRoster
+            child: _showOverview
+                ? ClassOverviewScreen(api: widget.api)
+                : _showRoster
                 ? RosterImportScreen(api: widget.api)
                 : Padding(
                     padding: const EdgeInsets.all(36),

@@ -35,6 +35,7 @@ class TodaySlot {
 class AttendanceSession {
   const AttendanceSession({
     required this.id,
+    required this.courseClassId,
     required this.subject,
     required this.classCode,
     required this.slot,
@@ -48,6 +49,7 @@ class AttendanceSession {
   factory AttendanceSession.fromMap(Map<String, dynamic> map) =>
       AttendanceSession(
         id: map['sessionId'] as String,
+        courseClassId: map['courseClassId'] as String,
         subject: map['subject'] as String,
         classCode: map['classCode'] as String,
         slot: (map['slot'] as num).toInt(),
@@ -59,6 +61,7 @@ class AttendanceSession {
       );
 
   final String id;
+  final String courseClassId;
   final String subject;
   final String classCode;
   final int slot;
@@ -67,6 +70,30 @@ class AttendanceSession {
   final String date;
   final int rotationSeconds;
   final int validitySeconds;
+}
+
+class CheckInRecord {
+  const CheckInRecord({
+    required this.id,
+    required this.studentId,
+    required this.email,
+    required this.studentCode,
+    required this.fullName,
+    required this.syncStatus,
+    required this.syncError,
+    required this.source,
+    required this.checkedInAt,
+  });
+
+  final String id;
+  final String studentId;
+  final String email;
+  final String studentCode;
+  final String fullName;
+  final String syncStatus;
+  final String? syncError;
+  final String source;
+  final DateTime? checkedInAt;
 }
 
 class IssuedQr {

@@ -85,6 +85,20 @@ class AppsScriptSheetService {
     try {
       decoded = jsonDecode(response.body);
     } on FormatException {
+      final body = response.body.toLowerCase();
+      if (body.contains('dopost') &&
+          (body.contains('không tìm thấy') || body.contains('not found'))) {
+        throw const SheetSyncException(
+          'Apps Script deployment chưa có hàm doPost. Hãy deploy Code.gs '
+          'thành phiên bản Web app mới và cập nhật URL /exec.',
+        );
+      }
+      if (body.contains('<html') || body.contains('<!doctype html')) {
+        throw const SheetSyncException(
+          'Apps Script trả về trang HTML thay vì JSON. Hãy kiểm tra Web app '
+          'đã deploy bản mới, Execute as Me và cho phép Anyone truy cập.',
+        );
+      }
       throw const SheetSyncException(
         'Apps Script trả về dữ liệu không hợp lệ.',
       );
