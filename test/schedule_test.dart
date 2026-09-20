@@ -47,6 +47,28 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test('xác định tuần từ thứ Hai đến Chủ nhật', () {
+    final date = DateTime(2026, 9, 20); // Chủ nhật
+
+    expect(_date(startOfWeek(date)), '2026-09-14');
+    expect(_date(endOfWeek(date)), '2026-09-20');
+  });
+
+  test('xác định cùng ngày mà không phụ thuộc thời gian', () {
+    expect(
+      isSameDate(DateTime(2026, 9, 20, 8), DateTime(2026, 9, 20, 23, 59)),
+      isTrue,
+    );
+    expect(isSameDate(DateTime(2026, 9, 20), DateTime(2026, 9, 21)), isFalse);
+  });
+
+  test('xác định slot trong ngày gần với thời điểm hiện tại', () {
+    expect(closestDaySlot(DateTime(2026, 9, 20, 7, 30)), 1);
+    expect(closestDaySlot(DateTime(2026, 9, 20, 10, 24)), 2);
+    expect(closestDaySlot(DateTime(2026, 9, 20, 16)), 4);
+    expect(closestDaySlot(DateTime(2026, 9, 20, 20)), 5);
+  });
 }
 
 String _date(DateTime value) =>

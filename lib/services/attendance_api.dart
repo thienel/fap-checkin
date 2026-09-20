@@ -32,10 +32,12 @@ class AttendanceApi {
     required String classCode,
     required DateTime startDate,
     required SchedulePreset preset,
+    required int daySlot,
   }) => _guard(() async {
     final uid = _teacherUid();
     final normalizedSubject = _requiredCode(subject, 'Mã môn');
     final normalizedClass = _requiredCode(classCode, 'Mã lớp');
+    _validateDaySlot(daySlot);
     final schedule = generateSchedule(startDate: startDate, preset: preset);
     final id = '${normalizedSubject}_$normalizedClass';
     final reference = _firestore.collection('courseClasses').doc(id);
@@ -51,7 +53,13 @@ class AttendanceApi {
         'slotCount': preset.slotCount,
         'weekLabel': preset.weekLabel,
         'schedule': schedule
-            .map((item) => {'number': item.number, 'date': _isoDate(item.date)})
+            .map(
+              (item) => {
+                'number': item.number,
+                'date': _isoDate(item.date),
+                'daySlot': daySlot,
+              },
+            )
             .toList(),
         'ownerUid': uid,
         'createdAt': FieldValue.serverTimestamp(),
@@ -59,40 +67,89 @@ class AttendanceApi {
     });
   });
 
-  Future<List<TodaySlot>> getTodaySlots(DateTime date) => _guard(() async {
+  Future<void> createTestCourseClassNow() => _guard(() async {
     final uid = _teacherUid();
-    final targetDate = _isoDate(date);
-    final snapshot = await _firestore
+    final now = DateTime.now();
+    final date = _isoDate(now);
+    final classCode = 'DEMO_${date.replaceAll('-', '')}';
+    final reference = _firestore
         .collection('courseClasses')
-        .where('ownerUid', isEqualTo: uid)
-        .get();
-    final slots = <TodaySlot>[];
+        .doc('TEST_$classCode');
+    final daySlot = closestDaySlot(now);
 
-    for (final document in snapshot.docs) {
-      final data = document.data();
-      final schedule = data['schedule'];
-      if (schedule is! List) continue;
-      for (final rawItem in schedule) {
-        if (rawItem is! Map) continue;
-        final item = Map<String, dynamic>.from(rawItem);
-        if (item['date'] != targetDate || item['number'] is! num) continue;
-        slots.add(
-          TodaySlot(
-            courseClassId: document.id,
-            subject: data['subject'] as String,
-            classCode: data['classCode'] as String,
-            slot: (item['number'] as num).toInt(),
-            date: targetDate,
-          ),
-        );
-      }
-    }
-    slots.sort((left, right) {
-      final subject = left.subject.compareTo(right.subject);
-      return subject != 0 ? subject : left.classCode.compareTo(right.classCode);
+    await _firestore.runTransaction((transaction) async {
+      if ((await transaction.get(reference)).exists) return;
+      transaction.set(reference, {
+        'subject': 'TEST',
+        'classCode': classCode,
+        'startDate': date,
+        'slotCount': 1,
+        'weekLabel': 1,
+        'schedule': [
+          {'number': 1, 'date': date, 'daySlot': daySlot},
+        ],
+        'ownerUid': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
     });
-    return slots;
   });
+
+  Future<List<TodaySlot>> getTodaySlots(DateTime date) =>
+      getSlotsInRange(date, date);
+
+  Future<List<TodaySlot>> getWeekSlots(DateTime date) =>
+      getSlotsInRange(startOfWeek(date), endOfWeek(date));
+
+  Future<List<TodaySlot>> getSlotsInRange(DateTime from, DateTime to) =>
+      _guard(() async {
+        final uid = _teacherUid();
+        final fromDate = _isoDate(from);
+        final toDate = _isoDate(to);
+        final snapshot = await _firestore
+            .collection('courseClasses')
+            .where('ownerUid', isEqualTo: uid)
+            .get();
+        final slots = <TodaySlot>[];
+
+        for (final document in snapshot.docs) {
+          final data = document.data();
+          final schedule = data['schedule'];
+          if (schedule is! List) continue;
+          for (final rawItem in schedule) {
+            if (rawItem is! Map) continue;
+            final item = Map<String, dynamic>.from(rawItem);
+            final itemDate = item['date'];
+            if (itemDate is! String ||
+                itemDate.compareTo(fromDate) < 0 ||
+                itemDate.compareTo(toDate) > 0 ||
+                item['number'] is! num) {
+              continue;
+            }
+            slots.add(
+              TodaySlot(
+                courseClassId: document.id,
+                subject: data['subject'] as String,
+                classCode: data['classCode'] as String,
+                slot: (item['number'] as num).toInt(),
+                slotCount: (data['slotCount'] as num?)?.toInt() ?? 0,
+                daySlot:
+                    (item['daySlot'] as num?)?.toInt() ??
+                    (data['daySlot'] as num?)?.toInt(),
+                date: itemDate,
+              ),
+            );
+          }
+        }
+        slots.sort((left, right) {
+          final date = left.date.compareTo(right.date);
+          if (date != 0) return date;
+          final subject = left.subject.compareTo(right.subject);
+          if (subject != 0) return subject;
+          final classCode = left.classCode.compareTo(right.classCode);
+          return classCode != 0 ? classCode : left.slot.compareTo(right.slot);
+        });
+        return slots;
+      });
 
   Future<AttendanceSession?> getActiveAttendance() => _guard(() async {
     final uid = _teacherUid();
@@ -112,7 +169,29 @@ class AttendanceApi {
       await activeReference.delete();
       return null;
     }
-    return AttendanceSession.fromMap({...data, 'sessionId': session.id});
+    var slotCount = 0;
+    int? daySlot;
+    final courseClassId = data['courseClassId'];
+    final courseSlot = data['slot'];
+    if (courseClassId is String && courseSlot is num) {
+      final course = await _firestore
+          .collection('courseClasses')
+          .doc(courseClassId)
+          .get();
+      final courseData = course.data();
+      slotCount = (courseData?['slotCount'] as num?)?.toInt() ?? 0;
+      final scheduled = _scheduledSlot(
+        courseData?['schedule'],
+        courseSlot.toInt(),
+      );
+      daySlot = (scheduled?['daySlot'] as num?)?.toInt();
+    }
+    return AttendanceSession.fromMap({
+      ...data,
+      'sessionId': session.id,
+      'slotCount': slotCount,
+      'daySlot': ?daySlot,
+    });
   });
 
   Future<AttendanceSession> startAttendance({
@@ -194,6 +273,8 @@ class AttendanceApi {
     return AttendanceSession.fromMap({
       ...sessionData,
       'sessionId': sessionReference.id,
+      'slotCount': slot.slotCount,
+      if (slot.daySlot != null) 'daySlot': slot.daySlot,
     });
   });
 
@@ -424,6 +505,12 @@ class AttendanceApi {
       );
     }
     return normalized;
+  }
+
+  void _validateDaySlot(int daySlot) {
+    if (daySlot < 1 || daySlot > 7) {
+      throw const AttendanceApiException('Slot trong ngày phải từ 1 đến 7.');
+    }
   }
 
   String _newToken() {

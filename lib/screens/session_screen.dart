@@ -190,8 +190,17 @@ class _SessionScreenState extends State<SessionScreen> {
                     _InfoCard(
                       icon: Icons.event_note_outlined,
                       label: 'Buổi học',
-                      value: 'Slot ${session.slot} · ${session.date}',
+                      value:
+                          'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · ${session.date}',
                     ),
+                    if (session.daySlot != null) ...[
+                      const SizedBox(height: 14),
+                      _InfoCard(
+                        icon: Icons.schedule_outlined,
+                        label: 'Khung giờ trong ngày',
+                        value: 'Slot ${session.daySlot}',
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     Expanded(
                       child: StreamBuilder<int>(

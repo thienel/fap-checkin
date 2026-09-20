@@ -4,6 +4,8 @@ class TodaySlot {
     required this.subject,
     required this.classCode,
     required this.slot,
+    required this.slotCount,
+    required this.daySlot,
     required this.date,
   });
 
@@ -12,13 +14,21 @@ class TodaySlot {
     subject: map['subject'] as String,
     classCode: map['classCode'] as String,
     slot: (map['slot'] as num).toInt(),
+    slotCount: (map['slotCount'] as num?)?.toInt() ?? 0,
+    daySlot: (map['daySlot'] as num?)?.toInt(),
     date: map['date'] as String,
   );
 
   final String courseClassId;
   final String subject;
   final String classCode;
+
+  /// Thứ tự buổi của môn học, ví dụ buổi 3/20.
   final int slot;
+  final int slotCount;
+
+  /// Khung giờ trong ngày (Slot 1–7). Null với dữ liệu cũ chưa được xếp.
+  final int? daySlot;
   final String date;
 }
 
@@ -28,6 +38,8 @@ class AttendanceSession {
     required this.subject,
     required this.classCode,
     required this.slot,
+    required this.slotCount,
+    required this.daySlot,
     required this.date,
     required this.rotationSeconds,
     required this.validitySeconds,
@@ -39,6 +51,8 @@ class AttendanceSession {
         subject: map['subject'] as String,
         classCode: map['classCode'] as String,
         slot: (map['slot'] as num).toInt(),
+        slotCount: (map['slotCount'] as num?)?.toInt() ?? 0,
+        daySlot: (map['daySlot'] as num?)?.toInt(),
         date: map['date'] as String,
         rotationSeconds: (map['rotationSeconds'] as num).toInt(),
         validitySeconds: (map['validitySeconds'] as num).toInt(),
@@ -48,6 +62,8 @@ class AttendanceSession {
   final String subject;
   final String classCode;
   final int slot;
+  final int slotCount;
+  final int? daySlot;
   final String date;
   final int rotationSeconds;
   final int validitySeconds;
