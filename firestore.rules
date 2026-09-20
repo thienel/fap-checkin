@@ -221,10 +221,92 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Canonical attendance state. There is exactly one final record per
+    // student and slot; QR, teacher edits and policy materialization all
+    // converge here. Legacy checkIns above remain readable during migration.
+    match /attendance/{courseClassId}/slots/{slotKey}/records/{studentId} {
+      allow get: if ownsCourse(courseClassId)
+        || (isGoogleUser()
+          && studentData(courseClassId, studentId).emailNormalized
+            == request.auth.token.email);
+      allow list: if ownsCourse(courseClassId);
+      allow create: if isGoogleUser()
+        && request.resource.data.studentId == studentId
+        && request.resource.data.firebaseUid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.emailNormalized == request.auth.token.email
+        && studentData(courseClassId, studentId).active == true
+        && studentData(courseClassId, studentId).emailNormalized
+          == request.resource.data.emailNormalized
+        && request.resource.data.studentCode
+          == studentData(courseClassId, studentId).studentCode
+        && request.resource.data.fullName
+          == studentData(courseClassId, studentId).fullName
+        && request.resource.data.courseClassId == courseClassId
+        && request.resource.data.slotKey == slotKey
+        && request.resource.data.attendanceStatus == 'present'
+        && request.resource.data.recordSource == 'qr'
+        && request.resource.data.checkedInAt == request.time
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.syncStatus == 'pending'
+        && sessionData(request.resource.data.sessionId).status == 'active'
+        && request.resource.data.ownerUid
+          == sessionData(request.resource.data.sessionId).ownerUid
+        && request.resource.data.courseClassId
+          == sessionData(request.resource.data.sessionId).courseClassId
+        && request.resource.data.subject
+          == sessionData(request.resource.data.sessionId).subject
+        && request.resource.data.classCode
+          == sessionData(request.resource.data.sessionId).classCode
+        && request.resource.data.slot
+          == sessionData(request.resource.data.sessionId).slot
+        && request.resource.data.slotKey
+          == sessionData(request.resource.data.sessionId).slotKey
+        && request.resource.data.date
+          == sessionData(request.resource.data.sessionId).date
+        && tokenData(request.resource.data.qrToken).sessionId
+          == request.resource.data.sessionId
+        && tokenData(request.resource.data.qrToken).issuedAt is timestamp
+        && tokenData(request.resource.data.qrToken).validitySeconds is int
+        && request.time <= tokenData(request.resource.data.qrToken).issuedAt
+          + duration.value(tokenData(request.resource.data.qrToken).validitySeconds, 's');
+      allow create, update: if ownsCourse(courseClassId)
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.studentId == studentId
+        && request.resource.data.courseClassId == courseClassId
+        && request.resource.data.slotKey == slotKey
+        && request.resource.data.attendanceStatus in ['present', 'absent', 'excused']
+        && request.resource.data.recordSource in ['qr', 'teacher', 'policy'];
+      allow delete: if false;
+
+      match /audit/{auditId} {
+        allow read: if ownsCourse(courseClassId);
+        allow create: if ownsCourse(courseClassId)
+          && request.resource.data.changedBy == request.auth.uid
+          && request.resource.data.changedAt == request.time
+          && request.resource.data.reason is string
+          && request.resource.data.reason.size() >= 3;
+        allow update, delete: if false;
+      }
+    }
+
     // Desktop uses collectionGroup('checkIns') to count and sync attendance.
     // Collection-group queries need a recursive wildcard rule because they can
     // target a checkIns collection at any document depth.
     match /{path=**}/checkIns/{userId} {
+      allow list: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid;
+      allow update: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'syncStatus', 'syncedAt', 'syncError'
+        ]);
+    }
+
+    match /{path=**}/records/{studentId} {
       allow list: if isTeacher()
         && resource.data.ownerUid == request.auth.uid;
       allow update: if isTeacher()

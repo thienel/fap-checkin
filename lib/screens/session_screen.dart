@@ -368,6 +368,12 @@ class _SessionScreenState extends State<SessionScreen> {
                           final hasSyncError = records.any(
                             (record) => record.syncStatus == 'error',
                           );
+                          final presentCount = records
+                              .where(
+                                (record) =>
+                                    record.attendanceStatus == 'present',
+                              )
+                              .length;
                           return Card(
                             clipBehavior: Clip.antiAlias,
                             child: Column(
@@ -387,7 +393,7 @@ class _SessionScreenState extends State<SessionScreen> {
                                       ),
                                       const SizedBox(width: 10),
                                       Text(
-                                        '${records.length} sinh viên đã điểm danh',
+                                        '$presentCount có mặt · ${records.length - presentCount} trạng thái khác',
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 17,
@@ -463,7 +469,8 @@ class _SessionScreenState extends State<SessionScreen> {
                                               ),
                                               subtitle: Text(
                                                 '${record.studentCode.isEmpty ? record.email : record.studentCode} · '
-                                                '${record.checkedInAt == null ? 'Đang ghi nhận' : DateFormat('HH:mm:ss').format(record.checkedInAt!)}',
+                                                '${_attendanceStatusLabel(record.attendanceStatus)} · '
+                                                '${record.checkedInAt == null ? 'Không có giờ check-in' : DateFormat('HH:mm:ss').format(record.checkedInAt!)}',
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                               ),
@@ -504,6 +511,12 @@ class _SessionScreenState extends State<SessionScreen> {
     );
   }
 }
+
+String _attendanceStatusLabel(String status) => switch (status) {
+  'absent' => 'Vắng',
+  'excused' => 'Có phép',
+  _ => 'Có mặt',
+};
 
 class _StudentInfoRow extends StatelessWidget {
   const _StudentInfoRow({

@@ -26,7 +26,7 @@ class AttendanceApi {
   final FirebaseAuth _auth;
   final AppsScriptSheetService _sheets;
   final Random _secureRandom = Random.secure();
-  final Set<String> _syncingRecords = {};
+  final Map<String, Future<String?>> _syncingRecords = {};
 
   bool get isSheetSyncConfigured => _sheets.isConfigured;
 
@@ -71,6 +71,9 @@ class AttendanceApi {
             studentCode: data['studentCode'] as String? ?? '',
             fullName: data['fullName'] as String? ?? '',
             active: data['active'] as bool? ?? true,
+            attendancePolicy: data['attendancePolicy'] == 'alwaysExcused'
+                ? AttendancePolicy.alwaysExcused
+                : AttendancePolicy.normal,
           );
         }).toList()..sort(
           (left, right) => left.displayName.compareTo(right.displayName),
@@ -98,19 +101,26 @@ class AttendanceApi {
         : <Map<String, dynamic>>[];
     schedule.sort((a, b) => (a['number'] as num).compareTo(b['number'] as num));
     final slots = <CourseSlotOverview>[];
-    final entrySnapshots = <int, QuerySnapshot<Map<String, dynamic>>>{};
+    final recordSnapshots = <int, QuerySnapshot<Map<String, dynamic>>>{};
+    final legacySnapshots = <int, QuerySnapshot<Map<String, dynamic>>>{};
     await Future.wait([
       for (final item in schedule)
         (() async {
           final number = (item['number'] as num).toInt();
-          entrySnapshots[number] = await _firestore
+          final slotReference = _firestore
               .collection('attendance')
               .doc(courseClassId)
               .collection('slots')
-              .doc('$number')
-              .collection('checkIns')
-              .where('ownerUid', isEqualTo: uid)
-              .get();
+              .doc('$number');
+          final snapshots = await Future.wait([
+            slotReference.collection('records').get(),
+            slotReference
+                .collection('checkIns')
+                .where('ownerUid', isEqualTo: uid)
+                .get(),
+          ]);
+          recordSnapshots[number] = snapshots[0];
+          legacySnapshots[number] = snapshots[1];
         })(),
     ]);
     for (final item in schedule) {
@@ -134,7 +144,11 @@ class AttendanceApi {
 
     final entries = <String, AttendanceEntry>{};
     for (final slot in slots) {
-      for (final document in entrySnapshots[slot.number]?.docs ?? const []) {
+      final documents = [
+        ...?legacySnapshots[slot.number]?.docs,
+        ...?recordSnapshots[slot.number]?.docs,
+      ];
+      for (final document in documents) {
         final data = document.data();
         final studentId = data['studentId'] as String?;
         if (studentId == null) continue;
@@ -142,9 +156,7 @@ class AttendanceApi {
         final source = data['recordSource'] as String? ?? 'qr';
         final status = switch (rawStatus) {
           'excused' => AttendanceStatus.excused,
-          'manual' => AttendanceStatus.manual,
           'absent' => AttendanceStatus.absent,
-          _ when source == 'teacher' => AttendanceStatus.manual,
           _ => AttendanceStatus.present,
         };
         entries[attendanceEntryKey(studentId, slot.number)] = AttendanceEntry(
@@ -155,6 +167,9 @@ class AttendanceApi {
           syncStatus: data['syncStatus'] as String? ?? 'pending',
           checkedInAt: (data['checkedInAt'] as Timestamp?)?.toDate(),
           sessionId: data['sessionId'] as String?,
+          reason: data['reason'] as String?,
+          updatedAt: (data['updatedAt'] as Timestamp?)?.toDate(),
+          updatedBy: data['updatedBy'] as String?,
         );
       }
     }
@@ -332,7 +347,7 @@ class AttendanceApi {
     final reference = _firestore
         .collection('courseClasses')
         .doc('TEST_$classCode');
-    final daySlot = closestDaySlot(now);
+    final schedule = generateDebugDaySchedule(now);
 
     await _firestore.runTransaction((transaction) async {
       final existing = await transaction.get(reference);
@@ -342,17 +357,40 @@ class AttendanceApi {
             'Lớp demo hôm nay đã thuộc một giảng viên khác.',
           );
         }
+        transaction.update(reference, {
+          'subject': debugCourseSubject,
+          'classCode': classCode,
+          'startDate': date,
+          'slotCount': schedule.length,
+          'weekLabel': 1,
+          'schedule': schedule
+              .map(
+                (item) => {
+                  'number': item.number,
+                  'date': _isoDate(item.date),
+                  'daySlot': item.daySlot,
+                },
+              )
+              .toList(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
         return;
       }
       transaction.set(reference, {
-        'subject': 'TEST',
+        'subject': debugCourseSubject,
         'classCode': classCode,
         'startDate': date,
-        'slotCount': 1,
+        'slotCount': schedule.length,
         'weekLabel': 1,
-        'schedule': [
-          {'number': 1, 'date': date, 'daySlot': daySlot},
-        ],
+        'schedule': schedule
+            .map(
+              (item) => {
+                'number': item.number,
+                'date': _isoDate(item.date),
+                'daySlot': item.daySlot,
+              },
+            )
+            .toList(),
         'ownerUid': uid,
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -556,6 +594,16 @@ class AttendanceApi {
       return data;
     });
 
+    await _materializeAlwaysExcused(
+      sessionId: sessionReference.id,
+      courseClassId: slot.courseClassId,
+      subject: sessionData['subject'] as String,
+      classCode: sessionData['classCode'] as String,
+      slot: slot.slot,
+      date: sessionData['date'] as String,
+      ownerUid: uid,
+    );
+
     return AttendanceSession.fromMap({
       ...sessionData,
       'sessionId': sessionReference.id,
@@ -563,6 +611,185 @@ class AttendanceApi {
       if (slot.daySlot != null) 'daySlot': slot.daySlot,
     });
   });
+
+  Future<void> setAttendancePolicy({
+    required String courseClassId,
+    required String studentId,
+    required AttendancePolicy policy,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final studentReference = courseReference
+        .collection('students')
+        .doc(studentId);
+    await _firestore.runTransaction((transaction) async {
+      final course = await transaction.get(courseReference);
+      final student = await transaction.get(studentReference);
+      if (!course.exists ||
+          course.data()?['ownerUid'] != uid ||
+          !student.exists) {
+        throw const AttendanceApiException(
+          'Không tìm thấy sinh viên trong lớp.',
+        );
+      }
+      transaction.update(studentReference, {
+        'attendancePolicy': policy == AttendancePolicy.alwaysExcused
+            ? 'alwaysExcused'
+            : 'normal',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': uid,
+      });
+    });
+  });
+
+  Future<void> adjustAttendance({
+    required String courseClassId,
+    required int slot,
+    required String studentId,
+    required AttendanceStatus status,
+    required String reason,
+  }) => _guard(() async {
+    if (status == AttendanceStatus.notYetOpen) {
+      throw const AttendanceApiException('Không thể ghi trạng thái chưa mở.');
+    }
+    final normalizedReason = reason.trim();
+    if (normalizedReason.length < 3) {
+      throw const AttendanceApiException('Lý do phải có ít nhất 3 ký tự.');
+    }
+    final uid = _teacherUid();
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final studentReference = courseReference
+        .collection('students')
+        .doc(studentId);
+    final sessions = await _firestore
+        .collection('attendanceSessions')
+        .where('ownerUid', isEqualTo: uid)
+        .get();
+    final matchingSessions = sessions.docs.where((document) {
+      final data = document.data();
+      return data['courseClassId'] == courseClassId && data['slot'] == slot;
+    }).toList();
+    if (matchingSessions.isEmpty) {
+      throw const AttendanceApiException(
+        'Chỉ có thể điều chỉnh sau khi slot đã được mở.',
+      );
+    }
+    matchingSessions.sort((left, right) {
+      final leftTime = left.data()['startedAt'] as Timestamp?;
+      final rightTime = right.data()['startedAt'] as Timestamp?;
+      return (rightTime?.millisecondsSinceEpoch ?? 0).compareTo(
+        leftTime?.millisecondsSinceEpoch ?? 0,
+      );
+    });
+    final session = matchingSessions.first;
+    final sessionData = session.data();
+    final recordReference = _firestore
+        .collection('attendance')
+        .doc(courseClassId)
+        .collection('slots')
+        .doc('$slot')
+        .collection('records')
+        .doc(studentId);
+    final auditReference = recordReference.collection('audit').doc();
+
+    await _firestore.runTransaction((transaction) async {
+      final course = await transaction.get(courseReference);
+      final student = await transaction.get(studentReference);
+      final existing = await transaction.get(recordReference);
+      final courseData = course.data();
+      final studentData = student.data();
+      if (!course.exists ||
+          courseData?['ownerUid'] != uid ||
+          !student.exists ||
+          studentData == null) {
+        throw const AttendanceApiException(
+          'Không tìm thấy sinh viên trong lớp.',
+        );
+      }
+      final beforeData = existing.data();
+      final beforeStatus =
+          beforeData?['attendanceStatus'] as String? ?? 'absent';
+      final afterStatus = _statusValue(status);
+      final record = <String, dynamic>{
+        'ownerUid': uid,
+        'studentId': studentId,
+        'email': studentData['email'],
+        'emailNormalized': studentData['emailNormalized'],
+        'studentCode': studentData['studentCode'],
+        'fullName': studentData['fullName'],
+        'sessionId': session.id,
+        'courseClassId': courseClassId,
+        'subject': courseData?['subject'],
+        'classCode': courseData?['classCode'],
+        'slot': slot,
+        'slotKey': '$slot',
+        'date': sessionData['date'],
+        'attendanceStatus': afterStatus,
+        'recordSource': 'teacher',
+        'reason': normalizedReason,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': uid,
+        'syncStatus': 'pending',
+        if (status == AttendanceStatus.present)
+          'checkedInAt':
+              beforeData?['checkedInAt'] ?? FieldValue.serverTimestamp(),
+        'createdAt': beforeData?['createdAt'] ?? FieldValue.serverTimestamp(),
+      };
+      transaction.set(recordReference, record);
+      transaction.set(auditReference, {
+        'before': {
+          'status': beforeStatus,
+          'source': beforeData?['recordSource'] ?? 'implicit',
+          'reason': beforeData?['reason'],
+        },
+        'after': {
+          'status': afterStatus,
+          'source': 'teacher',
+          'reason': normalizedReason,
+        },
+        'reason': normalizedReason,
+        'changedAt': FieldValue.serverTimestamp(),
+        'changedBy': uid,
+      });
+    });
+
+    if (!_sheets.isConfigured) {
+      throw const AttendanceApiException(
+        'Đã lưu trạng thái trên hệ thống nhưng chưa thể cập nhật Google Sheets '
+        'vì Apps Script chưa được cấu hình.',
+      );
+    }
+    final updated = await recordReference.get();
+    final syncError = await _syncDocument(updated);
+    if (syncError != null) {
+      throw AttendanceApiException(
+        'Đã lưu trạng thái trên hệ thống nhưng chưa thể cập nhật Google Sheets: '
+        '$syncError. Bản ghi đã được giữ trong hàng đợi để thử lại.',
+      );
+    }
+  });
+
+  Future<void> adjustAttendanceBulk({
+    required String courseClassId,
+    required int slot,
+    required Iterable<String> studentIds,
+    required AttendanceStatus status,
+    required String reason,
+  }) async {
+    for (final studentId in studentIds) {
+      await adjustAttendance(
+        courseClassId: courseClassId,
+        slot: slot,
+        studentId: studentId,
+        status: status,
+        reason: reason,
+      );
+    }
+  }
 
   Future<IssuedQr> issueQr(String sessionId) => _guard(() async {
     final uid = _teacherUid();
@@ -663,7 +890,7 @@ class AttendanceApi {
   Stream<int> watchAttendanceCount(String sessionId) {
     final uid = _teacherUid();
     return _firestore
-        .collectionGroup('checkIns')
+        .collectionGroup('records')
         .where('ownerUid', isEqualTo: uid)
         .where('sessionId', isEqualTo: sessionId)
         .snapshots()
@@ -671,7 +898,11 @@ class AttendanceApi {
           if (_sheets.isConfigured) {
             unawaited(_syncDocuments(snapshot.docs));
           }
-          return snapshot.size;
+          return snapshot.docs
+              .where(
+                (document) => document.data()['attendanceStatus'] == 'present',
+              )
+              .length;
         });
   }
 
@@ -682,7 +913,7 @@ class AttendanceApi {
         .doc(session.courseClassId)
         .collection('slots')
         .doc('${session.slot}')
-        .collection('checkIns')
+        .collection('records')
         .where('ownerUid', isEqualTo: uid)
         .snapshots()
         .map((snapshot) {
@@ -703,6 +934,8 @@ class AttendanceApi {
               syncStatus: data['syncStatus'] as String? ?? 'pending',
               syncError: data['syncError'] as String?,
               source: data['recordSource'] as String? ?? 'qr',
+              attendanceStatus:
+                  data['attendanceStatus'] as String? ?? 'present',
               checkedInAt: (data['checkedInAt'] as Timestamp?)?.toDate(),
             );
           }).toList();
@@ -718,52 +951,91 @@ class AttendanceApi {
   Future<void> syncPendingCheckIns({String? sessionId}) => _guard(() async {
     if (!_sheets.isConfigured) return;
     final uid = _teacherUid();
-    Query<Map<String, dynamic>> query = _firestore
+    Query<Map<String, dynamic>> recordQuery = _firestore
+        .collectionGroup('records')
+        .where('ownerUid', isEqualTo: uid)
+        .where('syncStatus', whereIn: ['pending', 'error']);
+    Query<Map<String, dynamic>> legacyQuery = _firestore
         .collectionGroup('checkIns')
         .where('ownerUid', isEqualTo: uid)
         .where('syncStatus', whereIn: ['pending', 'error']);
     if (sessionId != null) {
-      query = query.where('sessionId', isEqualTo: sessionId);
+      recordQuery = recordQuery.where('sessionId', isEqualTo: sessionId);
+      legacyQuery = legacyQuery.where('sessionId', isEqualTo: sessionId);
     }
-    final snapshot = await query.limit(100).get();
-    await _syncDocuments(snapshot.docs, retryErrors: true);
+    final snapshots = await Future.wait([
+      recordQuery.limit(100).get(),
+      legacyQuery.limit(100).get(),
+    ]);
+    await _syncDocuments(
+      [...snapshots[0].docs, ...snapshots[1].docs],
+      retryErrors: true,
+      reportErrors: true,
+    );
   });
 
   Future<void> _syncDocuments(
     Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> documents, {
     bool retryErrors = false,
+    bool reportErrors = false,
   }) async {
+    final errors = <String>[];
     for (final document in documents) {
       final status = document.data()['syncStatus'];
       if (status == 'pending' || (retryErrors && status == 'error')) {
-        await _syncDocument(document);
+        final error = await _syncDocument(document);
+        if (error != null) errors.add(error);
       }
+    }
+    if (reportErrors && errors.isNotEmpty) {
+      throw SheetSyncException(
+        'Không thể đồng bộ ${errors.length} bản ghi. ${errors.first}',
+      );
     }
   }
 
-  Future<void> _syncDocument(
-    QueryDocumentSnapshot<Map<String, dynamic>> document,
+  Future<String?> _syncDocument(
+    DocumentSnapshot<Map<String, dynamic>> document,
+  ) {
+    final path = document.reference.path;
+    final active = _syncingRecords[path];
+    if (active != null) return active;
+    late final Future<String?> operation;
+    operation = _performSyncDocument(document).whenComplete(() {
+      if (identical(_syncingRecords[path], operation)) {
+        _syncingRecords.remove(path);
+      }
+    });
+    _syncingRecords[path] = operation;
+    return operation;
+  }
+
+  Future<String?> _performSyncDocument(
+    DocumentSnapshot<Map<String, dynamic>> document,
   ) async {
-    if (!_syncingRecords.add(document.reference.path)) return;
     try {
       final data = document.data();
+      if (data == null) return null;
       final checkedInAt = data['checkedInAt'];
-      if (checkedInAt is! Timestamp) return;
-      await _sheets.append(
+      await _sheets.upsert(
         recordId: document.reference.path.replaceAll('/', '|'),
         subject: data['subject'] as String,
         classCode: data['classCode'] as String,
         slot: (data['slot'] as num).toInt(),
         date: data['date'] as String,
         email: data['email'] as String,
-        sessionId: data['sessionId'] as String,
-        checkedInAt: checkedInAt.toDate(),
+        sessionId: data['sessionId'] as String? ?? '',
+        checkedInAt: checkedInAt is Timestamp ? checkedInAt.toDate() : null,
+        attendanceStatus: data['attendanceStatus'] as String? ?? 'present',
+        recordSource: data['recordSource'] as String? ?? 'qr',
+        reason: data['reason'] as String?,
       );
       await document.reference.update({
         'syncStatus': 'synced',
         'syncedAt': FieldValue.serverTimestamp(),
         'syncError': FieldValue.delete(),
       });
+      return null;
     } on Object catch (error) {
       final message = error.toString();
       try {
@@ -776,10 +1048,91 @@ class AttendanceApi {
       } on Object {
         // A failed status update must not crash the live attendance screen.
       }
-    } finally {
-      _syncingRecords.remove(document.reference.path);
+      return message;
     }
   }
+
+  Future<void> _materializeAlwaysExcused({
+    required String sessionId,
+    required String courseClassId,
+    required String subject,
+    required String classCode,
+    required int slot,
+    required String date,
+    required String ownerUid,
+  }) async {
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final students = await courseReference
+        .collection('students')
+        .where('active', isEqualTo: true)
+        .where('attendancePolicy', isEqualTo: 'alwaysExcused')
+        .get();
+    if (students.docs.isEmpty) return;
+    final records = _firestore
+        .collection('attendance')
+        .doc(courseClassId)
+        .collection('slots')
+        .doc('$slot')
+        .collection('records');
+    final existing = await records.get();
+    final existingIds = existing.docs.map((document) => document.id).toSet();
+    final legacy = await _firestore
+        .collection('attendance')
+        .doc(courseClassId)
+        .collection('slots')
+        .doc('$slot')
+        .collection('checkIns')
+        .get();
+    existingIds.addAll(
+      legacy.docs
+          .map((document) => document.data()['studentId'])
+          .whereType<String>(),
+    );
+    final missingStudents = students.docs
+        .where((student) => !existingIds.contains(student.id))
+        .toList();
+    for (var start = 0; start < missingStudents.length; start += 400) {
+      final end = min(start + 400, missingStudents.length);
+      final batch = _firestore.batch();
+      for (final student in missingStudents.sublist(start, end)) {
+        final data = student.data();
+        batch.set(records.doc(student.id), {
+          'ownerUid': ownerUid,
+          'studentId': student.id,
+          'email': data['email'],
+          'emailNormalized': data['emailNormalized'],
+          'studentCode': data['studentCode'],
+          'fullName': data['fullName'],
+          'sessionId': sessionId,
+          'courseClassId': courseClassId,
+          'subject': subject,
+          'classCode': classCode,
+          'slot': slot,
+          'slotKey': '$slot',
+          'date': date,
+          'attendanceStatus': 'excused',
+          'recordSource': 'policy',
+          'reason': 'Miễn điểm danh toàn khóa',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedBy': ownerUid,
+          'syncStatus': 'pending',
+        });
+      }
+      await batch.commit();
+    }
+  }
+
+  String _statusValue(AttendanceStatus status) => switch (status) {
+    AttendanceStatus.present => 'present',
+    AttendanceStatus.absent => 'absent',
+    AttendanceStatus.excused => 'excused',
+    AttendanceStatus.notYetOpen => throw const AttendanceApiException(
+      'Không thể lưu trạng thái chưa mở.',
+    ),
+  };
 
   Future<void> _deleteSessionTokens({
     required String uid,

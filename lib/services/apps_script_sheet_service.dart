@@ -17,7 +17,7 @@ class AppsScriptSheetService {
 
   bool get isConfigured => _url.isNotEmpty && _secret.isNotEmpty;
 
-  Future<void> append({
+  Future<void> upsert({
     required String recordId,
     required String subject,
     required String classCode,
@@ -25,10 +25,13 @@ class AppsScriptSheetService {
     required String date,
     required String email,
     required String sessionId,
-    required DateTime checkedInAt,
+    required DateTime? checkedInAt,
+    required String attendanceStatus,
+    required String recordSource,
+    String? reason,
   }) async {
-    await _post({
-      'action': 'append',
+    final payload = <String, Object>{
+      'action': 'upsert',
       'recordId': recordId,
       'subject': subject,
       'classCode': classCode,
@@ -36,8 +39,32 @@ class AppsScriptSheetService {
       'date': date,
       'email': email,
       'sessionId': sessionId,
-      'checkedInAt': checkedInAt.toUtc().toIso8601String(),
-    });
+      ...?(checkedInAt == null
+          ? null
+          : {'checkedInAt': checkedInAt.toUtc().toIso8601String()}),
+      'attendanceStatus': attendanceStatus,
+      'recordSource': recordSource,
+      ...?(reason == null ? null : {'reason': reason}),
+    };
+    try {
+      await _post(payload);
+    } on SheetSyncException catch (error) {
+      final unsupported =
+          error.message.contains('không được hỗ trợ') ||
+          error.message.toLowerCase().contains('not supported');
+      // Deployments created before Phase 4 only understand `append`. Keep QR
+      // attendance syncing while the Apps Script deployment is upgraded. A
+      // manual/policy record must not use this fallback because old scripts
+      // cannot represent or update those statuses safely.
+      if (!unsupported ||
+          attendanceStatus != 'present' ||
+          recordSource != 'qr' ||
+          checkedInAt == null ||
+          sessionId.isEmpty) {
+        rethrow;
+      }
+      await _post({...payload, 'action': 'append'});
+    }
   }
 
   Future<void> sort({

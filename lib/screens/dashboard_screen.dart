@@ -89,7 +89,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Đã tạo lịch TEST cho hôm nay. Bạn có thể bắt đầu điểm danh ngay.',
+            'Đã đồng bộ PRM393 với 5 slot hôm nay. Bạn có thể bắt đầu điểm danh ngay.',
           ),
         ),
       );
@@ -574,7 +574,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                             const SizedBox(width: 8),
                             IconButton.filledTonal(
-                              tooltip: 'Tạo lịch TEST cho hôm nay',
+                              tooltip: 'Đồng bộ lịch test PRM393 hôm nay',
                               onPressed: _createTestScheduleNow,
                               icon: const Icon(Icons.science_outlined),
                             ),

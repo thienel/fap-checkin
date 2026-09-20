@@ -5,12 +5,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:rules": "node --test test/firestore.rules.test.mjs"
   },
   "dependencies": {
     "firebase": "^12.19.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "vite": "^8.3.0"
   }
 }

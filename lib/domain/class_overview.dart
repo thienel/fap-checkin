@@ -1,4 +1,6 @@
-enum AttendanceStatus { present, absent, excused, manual, notYetOpen }
+enum AttendanceStatus { present, absent, excused, notYetOpen }
+
+enum AttendancePolicy { normal, alwaysExcused }
 
 enum CourseSlotState { notOpened, active, completed }
 
@@ -9,6 +11,7 @@ class CourseStudent {
     required this.studentCode,
     required this.fullName,
     required this.active,
+    required this.attendancePolicy,
   });
 
   final String id;
@@ -16,8 +19,11 @@ class CourseStudent {
   final String studentCode;
   final String fullName;
   final bool active;
+  final AttendancePolicy attendancePolicy;
 
   String get displayName => fullName.isEmpty ? email : fullName;
+  bool get isAlwaysExcused =>
+      attendancePolicy == AttendancePolicy.alwaysExcused;
 }
 
 class CourseSlotOverview {
@@ -47,6 +53,9 @@ class AttendanceEntry {
     required this.syncStatus,
     this.checkedInAt,
     this.sessionId,
+    this.reason,
+    this.updatedAt,
+    this.updatedBy,
   });
 
   final String studentId;
@@ -56,6 +65,9 @@ class AttendanceEntry {
   final String syncStatus;
   final DateTime? checkedInAt;
   final String? sessionId;
+  final String? reason;
+  final DateTime? updatedAt;
+  final String? updatedBy;
 }
 
 class StudentAttendanceDetail {
@@ -117,8 +129,7 @@ class CourseOverview {
 
   int attendedCount(CourseStudent student) => slots.where((slot) {
     final status = statusFor(student.id, slot);
-    return status == AttendanceStatus.present ||
-        status == AttendanceStatus.manual;
+    return status == AttendanceStatus.present;
   }).length;
 
   int excusedCount(CourseStudent student) => slots
@@ -134,8 +145,7 @@ class CourseOverview {
         final status = statusFor(student.id, slot);
         if (status == AttendanceStatus.excused) continue;
         eligible++;
-        if (status == AttendanceStatus.present ||
-            status == AttendanceStatus.manual) {
+        if (status == AttendanceStatus.present) {
           attended++;
         }
       }

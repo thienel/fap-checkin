@@ -3,6 +3,48 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fap_check_attendance/domain/schedule.dart';
 
 void main() {
+  group('lịch debug PRM393', () {
+    test('tạo đủ 5 slot có thể kiểm thử trong cùng ngày', () {
+      final slots = generateDebugDaySchedule(DateTime(2026, 9, 20, 16, 30));
+
+      expect(debugCourseSubject, 'PRM393');
+      expect(slots, hasLength(debugCourseSlotCount));
+      expect(slots.map((slot) => slot.number), [1, 2, 3, 4, 5]);
+      expect(slots.map((slot) => slot.daySlot), [1, 2, 3, 4, 5]);
+      expect(slots.map((slot) => _date(slot.date)).toSet(), {'2026-09-20'});
+    });
+
+    test('chuẩn hóa giờ đầu vào để lịch chỉ lưu ngày', () {
+      final slots = generateDebugDaySchedule(DateTime(2026, 9, 20, 23, 59));
+
+      expect(
+        slots.every(
+          (slot) =>
+              slot.date.hour == 0 &&
+              slot.date.minute == 0 &&
+              slot.date.second == 0,
+        ),
+        isTrue,
+      );
+    });
+
+    test('mỗi slot debug khớp một khung giờ hợp lệ', () {
+      final slots = generateDebugDaySchedule(DateTime(2026, 9, 20));
+      final validDaySlots = daySlotDefinitions
+          .map((item) => item.number)
+          .toSet();
+
+      expect(
+        slots.every((slot) => validDaySlots.contains(slot.daySlot)),
+        isTrue,
+      );
+      expect(
+        slots.map((slot) => slot.daySlot).toSet(),
+        hasLength(slots.length),
+      );
+    });
+  });
+
   test('lịch hai buổi một tuần bỏ qua Chủ nhật', () {
     final slots = generateSchedule(
       startDate: DateTime(2026, 9, 17), // Thứ Năm

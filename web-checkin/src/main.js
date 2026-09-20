@@ -144,11 +144,17 @@ async function submitCheckIn(user) {
         session.courseClassId,
         'slots',
         session.slotKey,
-        'checkIns',
-        user.uid,
+        'records',
+        studentId,
       );
       const existing = await transaction.get(checkInReference);
-      if (existing.exists()) return { status: 'duplicate', email };
+      if (existing.exists()) {
+        return {
+          status: 'duplicate',
+          email,
+          attendanceStatus: existing.data().attendanceStatus,
+        };
+      }
 
       transaction.set(checkInReference, {
         ownerUid: session.ownerUid,
@@ -169,13 +175,20 @@ async function submitCheckIn(user) {
         checkedInAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         syncStatus: 'pending',
+        attendanceStatus: 'present',
+        recordSource: 'qr',
+        updatedAt: serverTimestamp(),
+        updatedBy: user.uid,
       });
       return { status: 'valid', email };
     });
 
     sessionStorage.removeItem('attendanceQrToken');
     if (result.status === 'duplicate') {
-      showStatus('success', 'Bạn đã điểm danh', `${result.email} đã được ghi nhận trước đó cho slot này.`);
+      const detail = result.attendanceStatus === 'excused'
+        ? `${result.email} đang được ghi nhận có phép cho slot này.`
+        : `${result.email} đã được ghi nhận trước đó cho slot này.`;
+      showStatus('success', 'Đã có trạng thái điểm danh', detail);
     } else {
       showStatus('success', 'Điểm danh thành công', `${result.email} đã được ghi nhận.`);
     }

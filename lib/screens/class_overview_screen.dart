@@ -53,7 +53,217 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
   void _refresh() {
     final course = _selectedClass;
     if (course != null) {
-      setState(() => _overview = widget.api.getCourseOverview(course.id));
+      setState(() {
+        _overview = widget.api.getCourseOverview(course.id);
+      });
+    }
+  }
+
+  Future<void> _refreshAndSync() async {
+    try {
+      await widget.api.syncPendingCheckIns();
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã đồng bộ dữ liệu với Google Sheets.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đồng bộ Google Sheets thất bại: $error')),
+      );
+    }
+  }
+
+  Future<({AttendanceStatus status, String reason})?> _changeDialog({
+    required String title,
+    required AttendanceStatus initialStatus,
+  }) async {
+    var reason = '';
+    var selected = initialStatus == AttendanceStatus.notYetOpen
+        ? AttendanceStatus.absent
+        : initialStatus;
+    final result = await showDialog<({AttendanceStatus status, String reason})>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<AttendanceStatus>(
+                  initialValue: selected,
+                  decoration: const InputDecoration(
+                    labelText: 'Trạng thái mới',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: AttendanceStatus.present,
+                      child: Text('Có mặt'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.absent,
+                      child: Text('Vắng'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.excused,
+                      child: Text('Có phép'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setDialogState(() => selected = value);
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  autofocus: true,
+                  maxLength: 300,
+                  onChanged: (value) => reason = value,
+                  decoration: const InputDecoration(
+                    labelText: 'Lý do bắt buộc',
+                    hintText: 'Ví dụ: Giảng viên xác nhận có mặt',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final trimmedReason = reason.trim();
+                if (trimmedReason.length < 3) return;
+                Navigator.pop(context, (
+                  status: selected,
+                  reason: trimmedReason,
+                ));
+              },
+              child: const Text('Lưu thay đổi'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return result;
+  }
+
+  Future<void> _editAttendance(
+    CourseOverview overview,
+    CourseStudent student,
+    CourseSlotOverview slot,
+  ) async {
+    if (!slot.hasOpened) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Slot chưa mở nên chưa thể điều chỉnh.')),
+      );
+      return;
+    }
+    final change = await _changeDialog(
+      title: '${student.displayName} · Buổi ${slot.number}',
+      initialStatus: overview.statusFor(student.id, slot),
+    );
+    if (change == null) return;
+    try {
+      await widget.api.adjustAttendance(
+        courseClassId: overview.courseClassId,
+        slot: slot.number,
+        studentId: student.id,
+        status: change.status,
+        reason: change.reason,
+      );
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã cập nhật hệ thống và Google Sheets.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Cập nhật chưa hoàn tất: $error')));
+    }
+  }
+
+  Future<void> _editAttendanceBulk(
+    CourseOverview overview,
+    CourseSlotOverview slot,
+  ) async {
+    if (!slot.hasOpened) return;
+    final students = _filteredStudents(overview)
+        .where((item) => item.active)
+        .toList();
+    if (students.isEmpty) return;
+    final change = await _changeDialog(
+      title: 'Điều chỉnh ${students.length} sinh viên · Buổi ${slot.number}',
+      initialStatus: AttendanceStatus.excused,
+    );
+    if (change == null) return;
+    try {
+      await widget.api.adjustAttendanceBulk(
+        courseClassId: overview.courseClassId,
+        slot: slot.number,
+        studentIds: students.map((item) => item.id),
+        status: change.status,
+        reason: change.reason,
+      );
+      if (mounted) _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể điều chỉnh hàng loạt: $error')),
+      );
+    }
+  }
+
+  Future<void> _togglePolicy(
+    CourseOverview overview,
+    CourseStudent student,
+  ) async {
+    final enable = !student.isAlwaysExcused;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          enable ? 'Miễn điểm danh toàn khóa?' : 'Tắt miễn toàn khóa?',
+        ),
+        content: Text(
+          enable
+              ? 'Các slot mở từ thời điểm này sẽ tự ghi nhận ${student.displayName} là có phép.'
+              : 'Lịch sử có phép đã tạo trước đây sẽ được giữ nguyên.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Xác nhận'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.api.setAttendancePolicy(
+        courseClassId: overview.courseClassId,
+        studentId: student.id,
+        policy: enable
+            ? AttendancePolicy.alwaysExcused
+            : AttendancePolicy.normal,
+      );
+      if (mounted) _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể cập nhật chính sách: $error')),
+      );
     }
   }
 
@@ -248,8 +458,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
               ),
               const SizedBox(width: 10),
               IconButton.filledTonal(
-                tooltip: 'Làm mới dữ liệu',
-                onPressed: _selectedClass == null ? null : _refresh,
+                tooltip: 'Đồng bộ Google Sheets và làm mới dữ liệu',
+                onPressed: _selectedClass == null ? null : _refreshAndSync,
                 icon: const Icon(Icons.refresh),
               ),
             ],
@@ -395,25 +605,42 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                             const DataColumn(label: Text('Tham dự')),
                             for (final slot in overview.slots)
                               DataColumn(
-                                label: InkWell(
-                                  onTap: () => _showSlotDetail(overview, slot),
-                                  child: Tooltip(
-                                    message: 'Xem chi tiết buổi ${slot.number}',
-                                    child: Column(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: [
-                                        Text('Buổi ${slot.number}'),
-                                        Text(
-                                          slot.date,
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.normal,
-                                          ),
+                                label: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    InkWell(
+                                      onTap: () =>
+                                          _showSlotDetail(overview, slot),
+                                      child: Tooltip(
+                                        message:
+                                            'Xem chi tiết buổi ${slot.number}',
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Text('Buổi ${slot.number}'),
+                                            Text(
+                                              slot.date,
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.normal,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                      ],
+                                      ),
                                     ),
-                                  ),
+                                    if (slot.hasOpened)
+                                      IconButton(
+                                        tooltip: 'Điều chỉnh tất cả sinh viên đang lọc',
+                                        onPressed: () =>
+                                            _editAttendanceBulk(overview, slot),
+                                        icon: const Icon(
+                                          Icons.playlist_add_check,
+                                          size: 18,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
                           ],
@@ -424,24 +651,50 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                   DataCell(
                                     SizedBox(
                                       width: 210,
-                                      child: Column(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
+                                      child: Row(
                                         children: [
-                                          Text(
-                                            student.displayName,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w700,
+                                          Expanded(
+                                            child: Column(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  student.displayName,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${student.studentCode} · ${student.email}',
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ),
-                                          Text(
-                                            '${student.studentCode} · ${student.email}',
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontSize: 11,
+                                          IconButton(
+                                            tooltip: student.isAlwaysExcused
+                                                ? 'Đang miễn toàn khóa – nhấn để tắt'
+                                                : 'Bật miễn điểm danh toàn khóa',
+                                            onPressed: () => _togglePolicy(
+                                              overview,
+                                              student,
+                                            ),
+                                            icon: Icon(
+                                              student.isAlwaysExcused
+                                                  ? Icons.policy
+                                                  : Icons.policy_outlined,
+                                              color: student.isAlwaysExcused
+                                                  ? const Color(0xFF7C5CBF)
+                                                  : null,
+                                              size: 19,
                                             ),
                                           ),
                                         ],
@@ -462,6 +715,14 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                           student.id,
                                           slot,
                                         ),
+                                        source: overview
+                                            .entryFor(student.id, slot.number)
+                                            ?.source,
+                                      ),
+                                      onTap: () => _editAttendance(
+                                        overview,
+                                        student,
+                                        slot,
                                       ),
                                     ),
                                 ],
@@ -514,20 +775,22 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
     );
   }
 
-  void _showSlotDetail(CourseOverview overview, CourseSlotOverview slot) {
+  Future<void> _showSlotDetail(
+    CourseOverview overview,
+    CourseSlotOverview slot,
+  ) async {
     final present = overview.students.where((s) {
       final status = overview.statusFor(s.id, slot);
-      return status == AttendanceStatus.present ||
-          status == AttendanceStatus.manual;
+      return status == AttendanceStatus.present;
     }).length;
     final excused = overview.students
         .where(
           (s) => overview.statusFor(s.id, slot) == AttendanceStatus.excused,
         )
         .length;
-    showDialog<void>(
+    final selectedStudent = await showDialog<CourseStudent>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: Text('Buổi ${slot.number} · ${slot.date}'),
         content: SizedBox(
           width: 680,
@@ -556,11 +819,22 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                       ListTile(
                         leading: _StatusBadge(
                           status: overview.statusFor(student.id, slot),
+                          source: overview
+                              .entryFor(student.id, slot.number)
+                              ?.source,
                         ),
                         title: Text(student.displayName),
                         subtitle: Text(
                           '${student.studentCode} · ${_entryDescription(overview.entryFor(student.id, slot.number))}',
                         ),
+                        trailing: slot.hasOpened
+                            ? IconButton(
+                                tooltip: 'Điều chỉnh',
+                                onPressed: () =>
+                                    Navigator.pop(dialogContext, student),
+                                icon: const Icon(Icons.edit_outlined),
+                              )
+                            : null,
                       ),
                   ],
                 ),
@@ -575,12 +849,15 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
             label: const Text('Xuất CSV'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Đóng'),
           ),
         ],
       ),
     );
+    if (selectedStudent != null && mounted) {
+      await _editAttendance(overview, selectedStudent, slot);
+    }
   }
 
   String _entryDescription(AttendanceEntry? entry) {
@@ -596,13 +873,13 @@ String _statusLabel(AttendanceStatus status) => switch (status) {
   AttendanceStatus.present => 'Có mặt',
   AttendanceStatus.absent => 'Vắng',
   AttendanceStatus.excused => 'Có phép',
-  AttendanceStatus.manual => 'Nhập tay',
   AttendanceStatus.notYetOpen => 'Chưa mở',
 };
 
 class _StatusBadge extends StatelessWidget {
-  const _StatusBadge({required this.status});
+  const _StatusBadge({required this.status, this.source});
   final AttendanceStatus status;
+  final String? source;
 
   @override
   Widget build(BuildContext context) {
@@ -610,12 +887,34 @@ class _StatusBadge extends StatelessWidget {
       AttendanceStatus.present => (Icons.check_circle, const Color(0xFF167052)),
       AttendanceStatus.absent => (Icons.cancel, const Color(0xFFB5473C)),
       AttendanceStatus.excused => (Icons.event_busy, const Color(0xFF7C5CBF)),
-      AttendanceStatus.manual => (Icons.edit_note, const Color(0xFF17658C)),
       AttendanceStatus.notYetOpen => (Icons.schedule, const Color(0xFF7B898D)),
     };
+    final sourceLabel = switch (source) {
+      'teacher' => 'Giảng viên chỉnh tay',
+      'policy' => 'Miễn theo chính sách',
+      'qr' => 'QR',
+      _ => null,
+    };
     return Tooltip(
-      message: _statusLabel(status),
-      child: Icon(icon, color: color, size: 22),
+      message: sourceLabel == null
+          ? _statusLabel(status)
+          : '${_statusLabel(status)} · $sourceLabel',
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(icon, color: color, size: 22),
+          if (source == 'teacher' || source == 'policy')
+            Positioned(
+              right: -7,
+              bottom: -5,
+              child: Icon(
+                source == 'teacher' ? Icons.edit : Icons.policy,
+                size: 11,
+                color: color,
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

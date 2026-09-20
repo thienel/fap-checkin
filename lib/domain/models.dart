@@ -82,6 +82,7 @@ class CheckInRecord {
     required this.syncStatus,
     required this.syncError,
     required this.source,
+    required this.attendanceStatus,
     required this.checkedInAt,
   });
 
@@ -93,6 +94,7 @@ class CheckInRecord {
   final String syncStatus;
   final String? syncError;
   final String source;
+  final String attendanceStatus;
   final DateTime? checkedInAt;
 }
 

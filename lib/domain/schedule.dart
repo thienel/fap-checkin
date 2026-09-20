@@ -13,10 +13,11 @@ enum SchedulePreset {
 }
 
 class ScheduledSlot {
-  const ScheduledSlot({required this.number, required this.date});
+  const ScheduledSlot({required this.number, required this.date, this.daySlot});
 
   final int number;
   final DateTime date;
+  final int? daySlot;
 }
 
 class DaySlotDefinition {
@@ -38,6 +39,27 @@ const daySlotDefinitions = <DaySlotDefinition>[
   DaySlotDefinition(6, null),
   DaySlotDefinition(7, null),
 ];
+
+const debugCourseSubject = 'PRM393';
+const debugCourseSlotCount = 5;
+
+/// Creates a deterministic one-day schedule for manual debug testing.
+///
+/// Every generated attendance slot maps to a different timetable slot, which
+/// lets a teacher open and close several sessions on the current date without
+/// waiting for future scheduled days.
+List<ScheduledSlot> generateDebugDaySchedule(DateTime date) {
+  final normalized = DateTime(date.year, date.month, date.day);
+  return List.generate(
+    debugCourseSlotCount,
+    (index) => ScheduledSlot(
+      number: index + 1,
+      date: normalized,
+      daySlot: daySlotDefinitions[index].number,
+    ),
+    growable: false,
+  );
+}
 
 int closestDaySlot(DateTime date) {
   final minutes = date.hour * 60 + date.minute;

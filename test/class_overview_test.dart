@@ -8,6 +8,7 @@ void main() {
     studentCode: 'SE0001',
     fullName: 'Nguyễn Văn A',
     active: true,
+    attendancePolicy: AttendancePolicy.normal,
   );
 
   const slots = [
@@ -92,7 +93,7 @@ void main() {
     expect(overview.atRiskStudentCount, 0);
   });
 
-  test('trạng thái nhập tay được tính là đã tham dự', () {
+  test('trạng thái có mặt do giảng viên chỉnh được tính là đã tham dự', () {
     final overview = CourseOverview(
       courseClassId: 'PRM_SE01',
       subject: 'PRM',
@@ -103,7 +104,7 @@ void main() {
         attendanceEntryKey('student-1', 1): const AttendanceEntry(
           studentId: 'student-1',
           slot: 1,
-          status: AttendanceStatus.manual,
+          status: AttendanceStatus.present,
           source: 'teacher',
           syncStatus: 'error',
         ),
