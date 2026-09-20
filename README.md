@@ -107,8 +107,19 @@ của tài khoản đang đăng nhập trong Xcode trước khi build.
 Windows:
 
 ```powershell
-flutter run -d windows --dart-define-from-file=firebase.desktop.json
+.\tool\run_windows.ps1
 ```
+
+Build file `.exe` trên ổ D:
+
+```powershell
+.\tool\build_windows.ps1 -Mode release
+```
+
+Hai script trên yêu cầu project nằm ở ổ `D:` và đặt Pub/TEMP/npm cache cục bộ
+trong project. File chạy được tạo tại
+`build\windows\x64\runner\<Mode>\fap_check_attendance.exe`, không dùng ổ C
+cho output hoặc cache riêng của project.
 
 Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore nhưng sẽ hiển thị cảnh báo rằng Google Sheets chưa được đồng bộ. Khi cấu hình xong và mở lại app, tối đa 100 bản ghi pending/error sẽ được thử gửi lại mỗi lần khởi động.
 
