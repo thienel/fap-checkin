@@ -55,6 +55,17 @@ cp web-checkin/.env.example web-checkin/.env
    - Who has access: **Anyone**.
 6. Authorize quyền Google Sheets và sao chép URL kết thúc bằng `/exec`.
 
+Khi `apps-script/Code.gs` được cập nhật, URL `/exec` không tự dùng mã nguồn mới.
+Vào **Deploy → Manage deployments**, chọn deployment Web app hiện tại, nhấn biểu
+tượng chỉnh sửa, chọn **Version → New version** rồi **Deploy**. Cách này giữ nguyên
+URL trong `firebase.desktop.json`. Nếu tạo một deployment hoàn toàn mới thì phải
+cập nhật lại `APPS_SCRIPT_URL` và build lại ứng dụng desktop.
+
+Các thay đổi điểm danh được lưu vào Firestore trước với `syncStatus: pending`.
+Nếu Apps Script tạm thời lỗi, bản ghi chuyển thành `error` thay vì bị mất. Sau khi
+deployment hoạt động, nút làm mới ở màn hình **Tổng quan lớp** sẽ thử đồng bộ lại
+cả các bản ghi `pending` và `error`.
+
 Apps Script chỉ nhận request có `SYNC_SECRET`. Với bản MVP chạy trên máy giảng viên, secret được đóng gói trong cấu hình desktop; không nên phát hành file cấu hình này công khai.
 
 ## 4. Cấu hình Flutter Desktop
@@ -85,6 +96,21 @@ firebase deploy --only firestore,hosting
 
 Không chạy `--only functions` vì Cloud Functions cần Blaze. `firebase.json` hiện không còn cấu hình deploy Functions; thư mục `functions/` chỉ được giữ làm mã legacy để đối chiếu và có thể xóa sau.
 
+### Deploy Firestore an toàn
+
+Sau mỗi thay đổi `firestore.rules`, `firestore.indexes.json` hoặc data model,
+chạy script sau thay vì chỉ build lại ứng dụng:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tool/deploy_firestore.ps1
+```
+
+Script sẽ kiểm tra `FIREBASE_PROJECT_ID` trong `firebase.desktop.json` trùng với
+project mặc định trong `.firebaserc`, chạy integration test allow/deny bằng
+Firestore Emulator, sau đó deploy đồng thời rules và indexes. Nếu project không
+khớp, rules không biên dịch được hoặc hành vi phân quyền sai, script dừng trước
+khi thay đổi Firebase production.
+
 URL check-in cố định:
 
 ```text
@@ -107,8 +133,19 @@ của tài khoản đang đăng nhập trong Xcode trước khi build.
 Windows:
 
 ```powershell
-flutter run -d windows --dart-define-from-file=firebase.desktop.json
+.\tool\run_windows.ps1
 ```
+
+Build file `.exe` trên ổ D:
+
+```powershell
+.\tool\build_windows.ps1 -Mode release
+```
+
+Hai script trên yêu cầu project nằm ở ổ `D:` và đặt Pub/TEMP/npm cache cục bộ
+trong project. File chạy được tạo tại
+`build\windows\x64\runner\<Mode>\fap_check_attendance.exe`, không dùng ổ C
+cho output hoặc cache riêng của project.
 
 Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore nhưng sẽ hiển thị cảnh báo rằng Google Sheets chưa được đồng bộ. Khi cấu hình xong và mở lại app, tối đa 100 bản ghi pending/error sẽ được thử gửi lại mỗi lần khởi động.
 
@@ -116,8 +153,9 @@ Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore n
 
 - Thời hạn QR được tính từ `serverTimestamp()` của Firestore, không tin đồng hồ điện thoại hay desktop.
 - Security Rules từ chối đọc QR sau thời hạn và từ chối ghi khi session đã dừng.
-- Document check-in có đường dẫn `attendance/<môn-lớp>/slots/<slot>/checkIns/<firebase-uid>`, nên một tài khoản Google chỉ được ghi lần đầu cho cùng môn–lớp–slot.
-- Apps Script kiểm tra `Record ID` trước khi append, nên retry không tạo dòng trùng trong Google Sheets.
+- Trạng thái cuối có đường dẫn `attendance/<môn-lớp>/slots/<slot>/records/<student-id>`; QR chỉ được tạo trạng thái `present`, còn giảng viên mới có quyền chỉnh `present/absent/excused`.
+- Mỗi lần giảng viên chỉnh tay tạo một document bất biến trong `records/<student-id>/audit`; tắt miễn toàn khóa không sửa lịch sử các slot cũ.
+- Apps Script dùng `Record ID` để upsert, nên chỉnh trạng thái hoặc retry sẽ cập nhật đúng một dòng thay vì tạo dữ liệu mâu thuẫn.
 - Firestore là dữ liệu gốc. Google Sheets là bản đồng bộ do desktop thực hiện khi máy đang mở.
 
 ## Quy tắc lịch
@@ -134,5 +172,5 @@ Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore n
 flutter analyze
 flutter test
 npm --prefix web-checkin run build
-firebase emulators:exec --only firestore "true"
+firebase emulators:exec --only firestore --project demo-fap-checkin-rules "npm --prefix web-checkin run test:rules"
 ```

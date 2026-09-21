@@ -3,9 +3,11 @@ const HEADERS = [
   'Date',
   'Check-in time',
   'Email',
-  'Result',
+  'Status',
+  'Source',
+  'Reason',
   'Session ID',
-  'Recorded at',
+  'Updated at',
   'Record ID',
 ];
 
@@ -22,8 +24,8 @@ function doPost(event) {
       properties.getProperty('SPREADSHEET_ID'),
       'SPREADSHEET_ID',
     );
-    if (payload.action === 'append') {
-      appendAttendance(spreadsheetId, payload);
+    if (payload.action === 'upsert' || payload.action === 'append') {
+      upsertAttendance(spreadsheetId, payload);
     } else if (payload.action === 'sort') {
       sortAttendance(spreadsheetId, payload);
     } else {
@@ -36,7 +38,7 @@ function doPost(event) {
   }
 }
 
-function appendAttendance(spreadsheetId, payload) {
+function upsertAttendance(spreadsheetId, payload) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
@@ -46,32 +48,49 @@ function appendAttendance(spreadsheetId, payload) {
       requiredText(payload.classCode, 'classCode'),
     );
     const recordId = requiredText(payload.recordId, 'recordId');
+    let existing = null;
     if (sheet.getLastRow() > 1) {
-      const existing = sheet
-        .getRange(2, 8, sheet.getLastRow() - 1, 1)
+      existing = sheet
+        .getRange(2, 10, sheet.getLastRow() - 1, 1)
         .createTextFinder(recordId)
         .matchEntireCell(true)
         .findNext();
-      if (existing) return;
     }
 
-    const checkedInAt = new Date(requiredText(payload.checkedInAt, 'checkedInAt'));
-    if (Number.isNaN(checkedInAt.getTime())) {
+    const checkedInAt = payload.checkedInAt ? new Date(payload.checkedInAt) : null;
+    if (checkedInAt && Number.isNaN(checkedInAt.getTime())) {
       throw new Error('checkedInAt không hợp lệ.');
     }
     const slot = Number(payload.slot);
     if (!Number.isInteger(slot) || slot < 1) throw new Error('slot không hợp lệ.');
+    const attendanceStatus = requiredText(
+      payload.attendanceStatus || 'present',
+      'attendanceStatus',
+    );
+    if (!['present', 'absent', 'excused'].includes(attendanceStatus)) {
+      throw new Error('attendanceStatus không hợp lệ.');
+    }
+    const recordSource = requiredText(payload.recordSource || 'qr', 'recordSource');
 
-    sheet.appendRow([
+    const row = [
       slot,
       requiredText(payload.date, 'date'),
-      Utilities.formatDate(checkedInAt, 'Asia/Ho_Chi_Minh', 'HH:mm:ss'),
+      checkedInAt
+        ? Utilities.formatDate(checkedInAt, 'Asia/Ho_Chi_Minh', 'HH:mm:ss')
+        : '',
       requiredText(payload.email, 'email'),
-      'VALID',
-      requiredText(payload.sessionId, 'sessionId'),
-      Utilities.formatDate(checkedInAt, 'Asia/Ho_Chi_Minh', "yyyy-MM-dd'T'HH:mm:ssXXX"),
+      attendanceStatus,
+      recordSource,
+      String(payload.reason || '').trim(),
+      String(payload.sessionId || '').trim(),
+      Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', "yyyy-MM-dd'T'HH:mm:ssXXX"),
       recordId,
-    ]);
+    ];
+    if (existing) {
+      sheet.getRange(existing.getRow(), 1, 1, HEADERS.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+    }
     sortSheet(sheet);
   } finally {
     lock.releaseLock();
@@ -115,8 +134,29 @@ function getOrCreateSheet(spreadsheetId, subject, classCode) {
     sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
     sheet.setFrozenRows(1);
     sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
+  } else {
+    migrateLegacyHeaders(sheet);
   }
   return sheet;
+}
+
+function migrateLegacyHeaders(sheet) {
+  const oldHeaders = sheet.getRange(1, 1, 1, Math.min(8, sheet.getLastColumn()))
+    .getValues()[0];
+  if (oldHeaders[4] === 'Result' && oldHeaders[7] === 'Record ID') {
+    const rowCount = sheet.getLastRow() - 1;
+    const oldRows = rowCount > 0 ? sheet.getRange(2, 1, rowCount, 8).getValues() : [];
+    const migrated = oldRows.map((row) => [
+      row[0], row[1], row[2], row[3], 'present', 'qr', '', row[5], row[6], row[7],
+    ]);
+    sheet.clearContents();
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    if (migrated.length) {
+      sheet.getRange(2, 1, migrated.length, HEADERS.length).setValues(migrated);
+    }
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
+  }
 }
 
 function requiredText(value, name) {

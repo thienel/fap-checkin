@@ -13,11 +13,77 @@ enum SchedulePreset {
 }
 
 class ScheduledSlot {
-  const ScheduledSlot({required this.number, required this.date});
+  const ScheduledSlot({required this.number, required this.date, this.daySlot});
 
   final int number;
   final DateTime date;
+  final int? daySlot;
 }
+
+class DaySlotDefinition {
+  const DaySlotDefinition(this.number, this.timeRange);
+
+  final int number;
+  final String? timeRange;
+
+  String get label =>
+      timeRange == null ? 'Slot $number' : 'Slot $number · $timeRange';
+}
+
+const daySlotDefinitions = <DaySlotDefinition>[
+  DaySlotDefinition(1, '07:00–09:15'),
+  DaySlotDefinition(2, '09:30–11:45'),
+  DaySlotDefinition(3, '12:30–14:45'),
+  DaySlotDefinition(4, '15:00–17:15'),
+  DaySlotDefinition(5, '17:45–20:00'),
+  DaySlotDefinition(6, null),
+  DaySlotDefinition(7, null),
+];
+
+const debugCourseSubject = 'PRM393';
+const debugCourseSlotCount = 5;
+
+/// Creates a deterministic one-day schedule for manual debug testing.
+///
+/// Every generated attendance slot maps to a different timetable slot, which
+/// lets a teacher open and close several sessions on the current date without
+/// waiting for future scheduled days.
+List<ScheduledSlot> generateDebugDaySchedule(DateTime date) {
+  final normalized = DateTime(date.year, date.month, date.day);
+  return List.generate(
+    debugCourseSlotCount,
+    (index) => ScheduledSlot(
+      number: index + 1,
+      date: normalized,
+      daySlot: daySlotDefinitions[index].number,
+    ),
+    growable: false,
+  );
+}
+
+int closestDaySlot(DateTime date) {
+  final minutes = date.hour * 60 + date.minute;
+  if (minutes < 9 * 60 + 23) return 1;
+  if (minutes < 12 * 60 + 8) return 2;
+  if (minutes < 14 * 60 + 53) return 3;
+  if (minutes < 17 * 60 + 30) return 4;
+  return 5;
+}
+
+DateTime startOfWeek(DateTime date) {
+  final normalized = DateTime(date.year, date.month, date.day);
+  return normalized.subtract(
+    Duration(days: normalized.weekday - DateTime.monday),
+  );
+}
+
+DateTime endOfWeek(DateTime date) =>
+    startOfWeek(date).add(const Duration(days: 6));
+
+bool isSameDate(DateTime left, DateTime right) =>
+    left.year == right.year &&
+    left.month == right.month &&
+    left.day == right.day;
 
 List<ScheduledSlot> generateSchedule({
   required DateTime startDate,

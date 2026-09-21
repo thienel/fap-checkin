@@ -10,6 +10,7 @@ import {
 } from 'firebase/auth';
 import {
   doc,
+  getDoc,
   getFirestore,
   runTransaction,
   serverTimestamp,
@@ -46,13 +47,43 @@ function showStatus(kind, heading, detail) {
   signInButton.classList.add('hidden');
 }
 
-function readableError(error) {
-  const code = String(error?.code || '');
-  if (code.includes('not-found')) return 'Mã QR không hợp lệ.';
-  if (code.includes('permission-denied')) {
-    return 'Mã QR đã hết hạn, không hợp lệ hoặc phiên điểm danh đã kết thúc.';
+function readableError(error, userEmail = '') {
+  const msg = error?.message || String(error || '');
+  if (msg === 'student-not-in-roster' || msg.includes('student-not-in-roster')) {
+    return `Email (${userEmail || 'Google'}) không thuộc danh sách sinh viên của lớp này. Vui lòng liên hệ giảng viên để kiểm tra và thêm bạn vào danh sách lớp.`;
   }
-  return 'Không thể hoàn tất điểm danh. Vui lòng quét lại mã QR.';
+  if (msg === 'student-inactive' || msg.includes('student-inactive')) {
+    return `Tài khoản sinh viên (${userEmail || ''}) đã bị tạm khóa trong danh sách lớp này. Vui lòng liên hệ giảng viên.`;
+  }
+  if (msg === 'student-email-mismatch' || msg.includes('student-email-mismatch')) {
+    return `Email Google (${userEmail || ''}) không khớp với email đã đăng ký trong danh sách lớp.`;
+  }
+  if (msg === 'qr-not-found' || msg.includes('qr-not-found')) {
+    return 'Mã QR không hợp lệ hoặc đã bị vô hiệu hóa. Vui lòng quét mã QR mới.';
+  }
+  if (msg === 'session-not-found' || msg.includes('session-not-found')) {
+    return 'Phiên điểm danh không tồn tại hoặc đã kết thúc.';
+  }
+  if (msg === 'session-stopped' || msg.includes('session-stopped')) {
+    return 'Giảng viên đã kết thúc phiên điểm danh này.';
+  }
+  if (msg === 'google-account-has-no-email' || msg.includes('google-account-has-no-email')) {
+    return 'Tài khoản Google của bạn không cung cấp địa chỉ email.';
+  }
+
+  const code = String(error?.code || '');
+  if (code.includes('not-found')) return 'Mã QR không hợp lệ hoặc đã hết hạn.';
+  if (code.includes('permission-denied')) {
+    return 'Không thể hoàn tất điểm danh. Mã QR có thể đã hết hạn hoặc phiên điểm danh đã kết thúc.';
+  }
+  return error?.message || 'Không thể hoàn tất điểm danh. Vui lòng quét lại mã QR.';
+}
+
+async function studentIdForEmail(email) {
+  const normalized = email.trim().toLowerCase();
+  const bytes = new TextEncoder().encode(normalized);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 async function submitCheckIn(user) {
@@ -63,34 +94,76 @@ async function submitCheckIn(user) {
   try {
     const email = user.email;
     if (!email) throw new Error('google-account-has-no-email');
+    const emailNormalized = email.trim().toLowerCase();
+    const studentId = await studentIdForEmail(emailNormalized);
 
+    // 1. Pre-check QR token
+    const tokenReference = doc(db, 'qrTokens', token);
+    const tokenSnapshot = await getDoc(tokenReference);
+    if (!tokenSnapshot.exists()) {
+      throw new Error('qr-not-found');
+    }
+    const tokenData = tokenSnapshot.data();
+
+    // 2. Pre-check Session
+    const sessionReference = doc(db, 'attendanceSessions', tokenData.sessionId);
+    const sessionSnapshot = await getDoc(sessionReference);
+    if (!sessionSnapshot.exists()) {
+      throw new Error('session-not-found');
+    }
+    const session = sessionSnapshot.data();
+    if (session.status !== 'active') {
+      throw new Error('session-stopped');
+    }
+
+    // 3. Pre-check Student in Roster
+    const studentReference = doc(
+      db,
+      'courseClasses',
+      session.courseClassId,
+      'students',
+      studentId,
+    );
+    const studentSnapshot = await getDoc(studentReference);
+    if (!studentSnapshot.exists()) {
+      throw new Error('student-not-in-roster');
+    }
+    const student = studentSnapshot.data();
+    if (student.emailNormalized !== emailNormalized) {
+      throw new Error('student-email-mismatch');
+    }
+    if (student.active !== true) {
+      throw new Error('student-inactive');
+    }
+
+    // 4. Perform atomic Check-In in transaction
     const result = await runTransaction(db, async (transaction) => {
-      const tokenReference = doc(db, 'qrTokens', token);
-      const tokenSnapshot = await transaction.get(tokenReference);
-      if (!tokenSnapshot.exists()) throw new Error('qr-not-found');
-
-      const tokenData = tokenSnapshot.data();
-      const sessionReference = doc(db, 'attendanceSessions', tokenData.sessionId);
-      const sessionSnapshot = await transaction.get(sessionReference);
-      if (!sessionSnapshot.exists()) throw new Error('session-not-found');
-
-      const session = sessionSnapshot.data();
       const checkInReference = doc(
         db,
         'attendance',
         session.courseClassId,
         'slots',
         session.slotKey,
-        'checkIns',
-        user.uid,
+        'records',
+        studentId,
       );
       const existing = await transaction.get(checkInReference);
-      if (existing.exists()) return { status: 'duplicate', email };
+      if (existing.exists()) {
+        return {
+          status: 'duplicate',
+          email,
+          attendanceStatus: existing.data().attendanceStatus,
+        };
+      }
 
       transaction.set(checkInReference, {
         ownerUid: session.ownerUid,
         firebaseUid: user.uid,
+        studentId,
         email,
+        emailNormalized,
+        studentCode: student.studentCode,
+        fullName: student.fullName,
         sessionId: sessionSnapshot.id,
         courseClassId: session.courseClassId,
         subject: session.subject,
@@ -102,27 +175,34 @@ async function submitCheckIn(user) {
         checkedInAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         syncStatus: 'pending',
+        attendanceStatus: 'present',
+        recordSource: 'qr',
+        updatedAt: serverTimestamp(),
+        updatedBy: user.uid,
       });
       return { status: 'valid', email };
     });
 
     sessionStorage.removeItem('attendanceQrToken');
     if (result.status === 'duplicate') {
-      showStatus('success', 'Bạn đã điểm danh', `${result.email} đã được ghi nhận trước đó cho slot này.`);
+      const detail = result.attendanceStatus === 'excused'
+        ? `${result.email} đang được ghi nhận có phép cho slot này.`
+        : `${result.email} đã được ghi nhận trước đó cho slot này.`;
+      showStatus('success', 'Đã có trạng thái điểm danh', detail);
     } else {
       showStatus('success', 'Điểm danh thành công', `${result.email} đã được ghi nhận.`);
     }
     await signOut(auth);
   } catch (error) {
     console.error(error);
-    showStatus('error', 'Không thể điểm danh', readableError(error));
+    showStatus('error', 'Không thể điểm danh', readableError(error, user?.email));
     await signOut(auth).catch(() => undefined);
   }
 }
 
 async function bootstrap() {
   if (!token) {
-    showStatus('error', 'Thiếu mã QR', 'Hãy quét mã QR đang hiển thị trên máy giảng viên.');
+    showStatus('error', 'Thiếu mã QR', 'Hãy quét mã QR đang hiển thị trên màn hình giảng viên.');
     return;
   }
 

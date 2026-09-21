@@ -17,7 +17,7 @@ class AppsScriptSheetService {
 
   bool get isConfigured => _url.isNotEmpty && _secret.isNotEmpty;
 
-  Future<void> append({
+  Future<void> upsert({
     required String recordId,
     required String subject,
     required String classCode,
@@ -25,10 +25,13 @@ class AppsScriptSheetService {
     required String date,
     required String email,
     required String sessionId,
-    required DateTime checkedInAt,
+    required DateTime? checkedInAt,
+    required String attendanceStatus,
+    required String recordSource,
+    String? reason,
   }) async {
-    await _post({
-      'action': 'append',
+    final payload = <String, Object>{
+      'action': 'upsert',
       'recordId': recordId,
       'subject': subject,
       'classCode': classCode,
@@ -36,8 +39,32 @@ class AppsScriptSheetService {
       'date': date,
       'email': email,
       'sessionId': sessionId,
-      'checkedInAt': checkedInAt.toUtc().toIso8601String(),
-    });
+      ...?(checkedInAt == null
+          ? null
+          : {'checkedInAt': checkedInAt.toUtc().toIso8601String()}),
+      'attendanceStatus': attendanceStatus,
+      'recordSource': recordSource,
+      ...?(reason == null ? null : {'reason': reason}),
+    };
+    try {
+      await _post(payload);
+    } on SheetSyncException catch (error) {
+      final unsupported =
+          error.message.contains('không được hỗ trợ') ||
+          error.message.toLowerCase().contains('not supported');
+      // Deployments created before Phase 4 only understand `append`. Keep QR
+      // attendance syncing while the Apps Script deployment is upgraded. A
+      // manual/policy record must not use this fallback because old scripts
+      // cannot represent or update those statuses safely.
+      if (!unsupported ||
+          attendanceStatus != 'present' ||
+          recordSource != 'qr' ||
+          checkedInAt == null ||
+          sessionId.isEmpty) {
+        rethrow;
+      }
+      await _post({...payload, 'action': 'append'});
+    }
   }
 
   Future<void> sort({
@@ -85,6 +112,20 @@ class AppsScriptSheetService {
     try {
       decoded = jsonDecode(response.body);
     } on FormatException {
+      final body = response.body.toLowerCase();
+      if (body.contains('dopost') &&
+          (body.contains('không tìm thấy') || body.contains('not found'))) {
+        throw const SheetSyncException(
+          'Apps Script deployment chưa có hàm doPost. Hãy deploy Code.gs '
+          'thành phiên bản Web app mới và cập nhật URL /exec.',
+        );
+      }
+      if (body.contains('<html') || body.contains('<!doctype html')) {
+        throw const SheetSyncException(
+          'Apps Script trả về trang HTML thay vì JSON. Hãy kiểm tra Web app '
+          'đã deploy bản mới, Execute as Me và cho phép Anyone truy cập.',
+        );
+      }
       throw const SheetSyncException(
         'Apps Script trả về dữ liệu không hợp lệ.',
       );

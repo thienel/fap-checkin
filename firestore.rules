@@ -29,6 +29,16 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/qrTokens/$(token)).data;
     }
 
+    function studentData(courseClassId, studentId) {
+      return get(/databases/$(database)/documents/courseClasses/$(courseClassId)/students/$(studentId)).data;
+    }
+
+    function ownsCourse(courseClassId) {
+      return isTeacher()
+        && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+          == request.auth.uid;
+    }
+
     match /teachers/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
       allow list, create, update, delete: if false;
@@ -55,6 +65,41 @@ service cloud.firestore {
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid;
       allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+
+      match /students/{studentId} {
+        // A Google user may only perform a direct lookup. IDs are SHA-256 hashes
+        // of normalized emails; collection listing remains forbidden.
+        allow get: if isGoogleUser()
+          || (isTeacher()
+            && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+              == request.auth.uid);
+        allow list: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid;
+        allow create, update: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid
+          && request.resource.data.emailNormalized is string
+          && request.resource.data.email is string
+          && request.resource.data.studentCode is string
+          && request.resource.data.fullName is string
+          && request.resource.data.active is bool
+          && request.resource.data.attendancePolicy in ['normal', 'alwaysExcused']
+          && request.resource.data.importedBy == request.auth.uid;
+        allow delete: if false;
+      }
+
+      match /imports/{importId} {
+        allow read: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid;
+        allow create: if isTeacher()
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+            == request.auth.uid
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
     }
 
     match /activeAttendanceSessions/{uid} {
@@ -118,17 +163,29 @@ service cloud.firestore {
     match /attendance/{courseClassId}/slots/{slotKey}/checkIns/{userId} {
       allow get: if signedIn()
         && (request.auth.uid == userId
-          || (isTeacher() && resource.data.ownerUid == request.auth.uid));
-      allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+          || ownsCourse(courseClassId));
+      // The course ID is fixed by this collection path, so ownership can be
+      // proven from the parent course without constraining every teacher query
+      // by a record field. This enables slot overview and realtime roster reads.
+      allow list: if ownsCourse(courseClassId);
       allow create: if isGoogleUser()
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
-          'ownerUid', 'firebaseUid', 'email', 'sessionId', 'courseClassId',
+          'ownerUid', 'firebaseUid', 'studentId', 'email', 'emailNormalized',
+          'studentCode', 'fullName', 'sessionId', 'courseClassId',
           'subject', 'classCode', 'slot', 'slotKey', 'date', 'qrToken',
           'checkedInAt', 'createdAt', 'syncStatus'
         ])
         && request.resource.data.firebaseUid == request.auth.uid
         && request.resource.data.email == request.auth.token.email
+        && studentData(courseClassId, request.resource.data.studentId).active == true
+        && studentData(courseClassId, request.resource.data.studentId).emailNormalized
+          == request.resource.data.emailNormalized
+        && request.resource.data.emailNormalized == request.auth.token.email
+        && request.resource.data.studentCode
+          == studentData(courseClassId, request.resource.data.studentId).studentCode
+        && request.resource.data.fullName
+          == studentData(courseClassId, request.resource.data.studentId).fullName
         && request.resource.data.courseClassId == courseClassId
         && request.resource.data.slotKey == slotKey
         && request.resource.data.checkedInAt == request.time
@@ -164,10 +221,92 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Canonical attendance state. There is exactly one final record per
+    // student and slot; QR, teacher edits and policy materialization all
+    // converge here. Legacy checkIns above remain readable during migration.
+    match /attendance/{courseClassId}/slots/{slotKey}/records/{studentId} {
+      allow get: if ownsCourse(courseClassId)
+        || (isGoogleUser()
+          && studentData(courseClassId, studentId).emailNormalized
+            == request.auth.token.email);
+      allow list: if ownsCourse(courseClassId);
+      allow create: if isGoogleUser()
+        && request.resource.data.studentId == studentId
+        && request.resource.data.firebaseUid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.emailNormalized == request.auth.token.email
+        && studentData(courseClassId, studentId).active == true
+        && studentData(courseClassId, studentId).emailNormalized
+          == request.resource.data.emailNormalized
+        && request.resource.data.studentCode
+          == studentData(courseClassId, studentId).studentCode
+        && request.resource.data.fullName
+          == studentData(courseClassId, studentId).fullName
+        && request.resource.data.courseClassId == courseClassId
+        && request.resource.data.slotKey == slotKey
+        && request.resource.data.attendanceStatus == 'present'
+        && request.resource.data.recordSource == 'qr'
+        && request.resource.data.checkedInAt == request.time
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.syncStatus == 'pending'
+        && sessionData(request.resource.data.sessionId).status == 'active'
+        && request.resource.data.ownerUid
+          == sessionData(request.resource.data.sessionId).ownerUid
+        && request.resource.data.courseClassId
+          == sessionData(request.resource.data.sessionId).courseClassId
+        && request.resource.data.subject
+          == sessionData(request.resource.data.sessionId).subject
+        && request.resource.data.classCode
+          == sessionData(request.resource.data.sessionId).classCode
+        && request.resource.data.slot
+          == sessionData(request.resource.data.sessionId).slot
+        && request.resource.data.slotKey
+          == sessionData(request.resource.data.sessionId).slotKey
+        && request.resource.data.date
+          == sessionData(request.resource.data.sessionId).date
+        && tokenData(request.resource.data.qrToken).sessionId
+          == request.resource.data.sessionId
+        && tokenData(request.resource.data.qrToken).issuedAt is timestamp
+        && tokenData(request.resource.data.qrToken).validitySeconds is int
+        && request.time <= tokenData(request.resource.data.qrToken).issuedAt
+          + duration.value(tokenData(request.resource.data.qrToken).validitySeconds, 's');
+      allow create, update: if ownsCourse(courseClassId)
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.studentId == studentId
+        && request.resource.data.courseClassId == courseClassId
+        && request.resource.data.slotKey == slotKey
+        && request.resource.data.attendanceStatus in ['present', 'absent', 'excused']
+        && request.resource.data.recordSource in ['qr', 'teacher', 'policy'];
+      allow delete: if false;
+
+      match /audit/{auditId} {
+        allow read: if ownsCourse(courseClassId);
+        allow create: if ownsCourse(courseClassId)
+          && request.resource.data.changedBy == request.auth.uid
+          && request.resource.data.changedAt == request.time
+          && request.resource.data.reason is string
+          && request.resource.data.reason.size() >= 3;
+        allow update, delete: if false;
+      }
+    }
+
     // Desktop uses collectionGroup('checkIns') to count and sync attendance.
     // Collection-group queries need a recursive wildcard rule because they can
     // target a checkIns collection at any document depth.
     match /{path=**}/checkIns/{userId} {
+      allow list: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid;
+      allow update: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'syncStatus', 'syncedAt', 'syncError'
+        ]);
+    }
+
+    match /{path=**}/records/{studentId} {
       allow list: if isTeacher()
         && resource.data.ownerUid == request.auth.uid;
       allow update: if isTeacher()

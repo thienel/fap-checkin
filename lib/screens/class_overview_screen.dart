@@ -1,0 +1,1020 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:csv/csv.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../domain/class_overview.dart';
+import '../domain/models.dart';
+import '../services/attendance_api.dart';
+import 'session_screen.dart';
+
+class ClassOverviewScreen extends StatefulWidget {
+  const ClassOverviewScreen({super.key, required this.api});
+
+  final AttendanceApi api;
+
+  @override
+  State<ClassOverviewScreen> createState() => _ClassOverviewScreenState();
+}
+
+class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
+  late Future<List<CourseClassSummary>> _classes;
+  Future<CourseOverview>? _overview;
+  CourseClassSummary? _selectedClass;
+  final _searchController = TextEditingController();
+  final _matrixVerticalController = ScrollController();
+  AttendanceStatus? _statusFilter;
+
+  @override
+  void initState() {
+    super.initState();
+    _classes = widget.api.getCourseClasses();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _matrixVerticalController.dispose();
+    super.dispose();
+  }
+
+  void _selectClass(CourseClassSummary? course) {
+    setState(() {
+      _selectedClass = course;
+      _overview = course == null
+          ? null
+          : widget.api.getCourseOverview(course.id);
+    });
+  }
+
+  void _refresh() {
+    final course = _selectedClass;
+    if (course != null) {
+      setState(() {
+        _overview = widget.api.getCourseOverview(course.id);
+      });
+    }
+  }
+
+  Future<void> _refreshAndSync() async {
+    try {
+      await widget.api.syncPendingCheckIns();
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã đồng bộ dữ liệu với Google Sheets.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đồng bộ Google Sheets thất bại: $error')),
+      );
+    }
+  }
+
+  Future<({AttendanceStatus status, String reason})?> _changeDialog({
+    required String title,
+    required AttendanceStatus initialStatus,
+  }) async {
+    var reason = '';
+    var selected = initialStatus == AttendanceStatus.notYetOpen
+        ? AttendanceStatus.absent
+        : initialStatus;
+    final result = await showDialog<({AttendanceStatus status, String reason})>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<AttendanceStatus>(
+                  initialValue: selected,
+                  decoration: const InputDecoration(
+                    labelText: 'Trạng thái mới',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: AttendanceStatus.present,
+                      child: Text('Có mặt'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.absent,
+                      child: Text('Vắng'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.excused,
+                      child: Text('Có phép'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setDialogState(() => selected = value);
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  autofocus: true,
+                  maxLength: 300,
+                  onChanged: (value) => reason = value,
+                  decoration: const InputDecoration(
+                    labelText: 'Lý do bắt buộc',
+                    hintText: 'Ví dụ: Giảng viên xác nhận có mặt',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final trimmedReason = reason.trim();
+                if (trimmedReason.length < 3) return;
+                Navigator.pop(context, (
+                  status: selected,
+                  reason: trimmedReason,
+                ));
+              },
+              child: const Text('Lưu thay đổi'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return result;
+  }
+
+  Future<void> _editAttendance(
+    CourseOverview overview,
+    CourseStudent student,
+    CourseSlotOverview slot,
+  ) async {
+    if (!slot.hasOpened) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Slot chưa mở nên chưa thể điều chỉnh.')),
+      );
+      return;
+    }
+    final change = await _changeDialog(
+      title: '${student.displayName} · Buổi ${slot.number}',
+      initialStatus: overview.statusFor(student.id, slot),
+    );
+    if (change == null) return;
+    try {
+      await widget.api.adjustAttendance(
+        courseClassId: overview.courseClassId,
+        slot: slot.number,
+        studentId: student.id,
+        status: change.status,
+        reason: change.reason,
+      );
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã cập nhật hệ thống và Google Sheets.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Cập nhật chưa hoàn tất: $error')));
+    }
+  }
+
+  Future<void> _editAttendanceBulk(
+    CourseOverview overview,
+    CourseSlotOverview slot,
+  ) async {
+    if (!slot.hasOpened) return;
+    final students = _filteredStudents(overview)
+        .where((item) => item.active)
+        .toList();
+    if (students.isEmpty) return;
+    final change = await _changeDialog(
+      title: 'Điều chỉnh ${students.length} sinh viên · Buổi ${slot.number}',
+      initialStatus: AttendanceStatus.excused,
+    );
+    if (change == null) return;
+    try {
+      await widget.api.adjustAttendanceBulk(
+        courseClassId: overview.courseClassId,
+        slot: slot.number,
+        studentIds: students.map((item) => item.id),
+        status: change.status,
+        reason: change.reason,
+      );
+      if (mounted) _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể điều chỉnh hàng loạt: $error')),
+      );
+    }
+  }
+
+  Future<void> _togglePolicy(
+    CourseOverview overview,
+    CourseStudent student,
+  ) async {
+    final enable = !student.isAlwaysExcused;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          enable ? 'Miễn điểm danh toàn khóa?' : 'Tắt miễn toàn khóa?',
+        ),
+        content: Text(
+          enable
+              ? 'Các slot mở từ thời điểm này sẽ tự ghi nhận ${student.displayName} là có phép.'
+              : 'Lịch sử có phép đã tạo trước đây sẽ được giữ nguyên.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Xác nhận'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.api.setAttendancePolicy(
+        courseClassId: overview.courseClassId,
+        studentId: student.id,
+        policy: enable
+            ? AttendancePolicy.alwaysExcused
+            : AttendancePolicy.normal,
+      );
+      if (mounted) _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể cập nhật chính sách: $error')),
+      );
+    }
+  }
+
+  Future<void> _openActiveSession(CourseOverview overview) async {
+    try {
+      final session = await widget.api.getActiveAttendance();
+      if (!mounted) return;
+      if (session == null || session.courseClassId != overview.courseClassId) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Phiên điểm danh không còn hoạt động.')),
+        );
+        _refresh();
+        return;
+      }
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => SessionScreen(api: widget.api, session: session),
+        ),
+      );
+      if (mounted) _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể mở phiên điểm danh: $error')),
+      );
+    }
+  }
+
+  List<CourseStudent> _filteredStudents(CourseOverview overview) {
+    final query = _searchController.text.trim().toLowerCase();
+    return overview.students.where((student) {
+      final matchesText =
+          query.isEmpty ||
+          student.fullName.toLowerCase().contains(query) ||
+          student.email.toLowerCase().contains(query) ||
+          student.studentCode.toLowerCase().contains(query);
+      final filter = _statusFilter;
+      final matchesStatus =
+          filter == null ||
+          overview.slots.any(
+            (slot) => overview.statusFor(student.id, slot) == filter,
+          );
+      return matchesText && matchesStatus;
+    }).toList();
+  }
+
+  Future<void> _exportMatrix(CourseOverview overview) async {
+    final rows = <List<dynamic>>[
+      [
+        'Báo cáo ma trận điểm danh',
+        '${overview.subject} · ${overview.classCode}',
+      ],
+      ['Timezone', 'Asia/Ho_Chi_Minh'],
+      ['Ngày tạo', DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())],
+      [],
+      [
+        'Mã sinh viên',
+        'Họ tên',
+        'Email',
+        for (final slot in overview.slots) 'Buổi ${slot.number} (${slot.date})',
+        'Đã tham dự',
+      ],
+      for (final student in _filteredStudents(overview))
+        [
+          student.studentCode,
+          student.fullName,
+          student.email,
+          for (final slot in overview.slots)
+            _statusLabel(overview.statusFor(student.id, slot)),
+          '${overview.attendedCount(student)}/${overview.openedSlotCount}',
+        ],
+      [],
+      ['Chú giải', 'Có mặt; Vắng; Có phép; Nhập tay; Chưa mở'],
+    ];
+    await _saveCsv(
+      '${overview.subject}_${overview.classCode}_attendance_matrix.csv',
+      rows,
+    );
+  }
+
+  Future<void> _exportSlot(
+    CourseOverview overview,
+    CourseSlotOverview slot,
+  ) async {
+    final rows = <List<dynamic>>[
+      [
+        'Chi tiết buổi ${slot.number}',
+        '${overview.subject} · ${overview.classCode}',
+      ],
+      ['Ngày học', slot.date],
+      ['Timezone', 'Asia/Ho_Chi_Minh'],
+      ['Ngày tạo', DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())],
+      [],
+      [
+        'Mã sinh viên',
+        'Họ tên',
+        'Email',
+        'Trạng thái',
+        'Thời gian',
+        'Nguồn',
+        'Đồng bộ',
+      ],
+      for (final student in overview.students)
+        [
+          student.studentCode,
+          student.fullName,
+          student.email,
+          _statusLabel(overview.statusFor(student.id, slot)),
+          overview.entryFor(student.id, slot.number)?.checkedInAt == null
+              ? ''
+              : DateFormat('dd/MM/yyyy HH:mm:ss').format(
+                  overview.entryFor(student.id, slot.number)!.checkedInAt!,
+                ),
+          overview.entryFor(student.id, slot.number)?.source ?? '',
+          overview.entryFor(student.id, slot.number)?.syncStatus ?? '',
+        ],
+    ];
+    await _saveCsv(
+      '${overview.subject}_${overview.classCode}_slot_${slot.number}.csv',
+      rows,
+    );
+  }
+
+  Future<void> _saveCsv(String fileName, List<List<dynamic>> rows) async {
+    try {
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Lưu báo cáo điểm danh',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: const ['csv'],
+      );
+      if (path == null) return;
+      final csv = const ListToCsvConverter().convert(rows);
+      await File(path).writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(csv)]);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Đã xuất báo cáo: $path')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Không thể xuất báo cáo: $error')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(36),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Tổng quan lớp học',
+                      style: Theme.of(context).textTheme.headlineMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Theo dõi slots, sinh viên, tỷ lệ tham dự và phiên đang điểm danh.',
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                width: 310,
+                child: FutureBuilder<List<CourseClassSummary>>(
+                  future: _classes,
+                  builder: (context, snapshot) => DropdownButtonFormField(
+                    initialValue: _selectedClass,
+                    decoration: const InputDecoration(
+                      labelText: 'Môn–lớp',
+                      prefixIcon: Icon(Icons.school_outlined),
+                    ),
+                    items: [
+                      for (final course
+                          in snapshot.data ?? const <CourseClassSummary>[])
+                        DropdownMenuItem(
+                          value: course,
+                          child: Text(course.label),
+                        ),
+                    ],
+                    onChanged: _selectClass,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              IconButton.filledTonal(
+                tooltip: 'Đồng bộ Google Sheets và làm mới dữ liệu',
+                onPressed: _selectedClass == null ? null : _refreshAndSync,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Expanded(
+            child: _overview == null
+                ? const _OverviewEmpty()
+                : FutureBuilder<CourseOverview>(
+                    future: _overview,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      if (snapshot.hasError) {
+                        return Center(
+                          child: Text(
+                            'Không tải được tổng quan: ${snapshot.error}',
+                          ),
+                        );
+                      }
+                      return _buildOverview(snapshot.requireData);
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOverview(CourseOverview overview) {
+    final students = _filteredStudents(overview);
+    return Column(
+      children: [
+        if (overview.activeSlot != null) ...[
+          _ActiveSlotBanner(
+            slot: overview.activeSlot!,
+            onOpen: () => _openActiveSession(overview),
+          ),
+          const SizedBox(height: 14),
+        ],
+        Row(
+          children: [
+            Expanded(
+              child: _MetricCard(
+                label: 'Sĩ số',
+                value: '${overview.activeStudentCount}',
+                icon: Icons.groups_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _MetricCard(
+                label: 'Slots đã mở',
+                value: '${overview.openedSlotCount}/${overview.slots.length}',
+                icon: Icons.event_available_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _MetricCard(
+                label: 'Tỷ lệ tham dự',
+                value: '${(overview.attendanceRate * 100).toStringAsFixed(1)}%',
+                icon: Icons.trending_up,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _MetricCard(
+                label: 'Cần chú ý',
+                value:
+                    '${overview.atRiskStudentCount + overview.syncErrorCount}',
+                icon: Icons.warning_amber_rounded,
+                warning:
+                    overview.atRiskStudentCount + overview.syncErrorCount > 0,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _searchController,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  prefixIcon: Icon(Icons.search),
+                  hintText: 'Tìm tên, email hoặc mã sinh viên',
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 190,
+              child: DropdownButtonFormField<AttendanceStatus?>(
+                initialValue: _statusFilter,
+                decoration: const InputDecoration(
+                  labelText: 'Lọc trạng thái',
+                  isDense: true,
+                ),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('Tất cả')),
+                  for (final status in AttendanceStatus.values)
+                    DropdownMenuItem(
+                      value: status,
+                      child: Text(_statusLabel(status)),
+                    ),
+                ],
+                onChanged: (value) => setState(() => _statusFilter = value),
+              ),
+            ),
+            const SizedBox(width: 12),
+            FilledButton.tonalIcon(
+              onPressed: () => _exportMatrix(overview),
+              icon: const Icon(Icons.download_outlined),
+              label: const Text('Xuất ma trận CSV'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: Card(
+            clipBehavior: Clip.antiAlias,
+            child: students.isEmpty
+                ? const Center(
+                    child: Text('Không có sinh viên phù hợp bộ lọc.'),
+                  )
+                : Scrollbar(
+                    controller: _matrixVerticalController,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: _matrixVerticalController,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          headingRowColor: WidgetStateProperty.all(
+                            const Color(0xFFEAF1F3),
+                          ),
+                          columns: [
+                            const DataColumn(label: Text('Sinh viên')),
+                            const DataColumn(label: Text('Tham dự')),
+                            for (final slot in overview.slots)
+                              DataColumn(
+                                label: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    InkWell(
+                                      onTap: () =>
+                                          _showSlotDetail(overview, slot),
+                                      child: Tooltip(
+                                        message:
+                                            'Xem chi tiết buổi ${slot.number}',
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Text('Buổi ${slot.number}'),
+                                            Text(
+                                              slot.date,
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.normal,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    if (slot.hasOpened)
+                                      IconButton(
+                                        tooltip: 'Điều chỉnh tất cả sinh viên đang lọc',
+                                        onPressed: () =>
+                                            _editAttendanceBulk(overview, slot),
+                                        icon: const Icon(
+                                          Icons.playlist_add_check,
+                                          size: 18,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                          rows: [
+                            for (final student in students)
+                              DataRow(
+                                cells: [
+                                  DataCell(
+                                    SizedBox(
+                                      width: 210,
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Column(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  student.displayName,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${student.studentCode} · ${student.email}',
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: student.isAlwaysExcused
+                                                ? 'Đang miễn toàn khóa – nhấn để tắt'
+                                                : 'Bật miễn điểm danh toàn khóa',
+                                            onPressed: () => _togglePolicy(
+                                              overview,
+                                              student,
+                                            ),
+                                            icon: Icon(
+                                              student.isAlwaysExcused
+                                                  ? Icons.policy
+                                                  : Icons.policy_outlined,
+                                              color: student.isAlwaysExcused
+                                                  ? const Color(0xFF7C5CBF)
+                                                  : null,
+                                              size: 19,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    onTap: () =>
+                                        _showStudentDetail(overview, student),
+                                  ),
+                                  DataCell(
+                                    Text(
+                                      '${overview.attendedCount(student)}/${overview.openedSlotCount}',
+                                    ),
+                                  ),
+                                  for (final slot in overview.slots)
+                                    DataCell(
+                                      _StatusBadge(
+                                        status: overview.statusFor(
+                                          student.id,
+                                          slot,
+                                        ),
+                                        source: overview
+                                            .entryFor(student.id, slot.number)
+                                            ?.source,
+                                      ),
+                                      onTap: () => _editAttendance(
+                                        overview,
+                                        student,
+                                        slot,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showStudentDetail(CourseOverview overview, CourseStudent student) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(student.displayName),
+        content: SizedBox(
+          width: 620,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Text('${student.studentCode} · ${student.email}'),
+              const SizedBox(height: 14),
+              for (final slot in overview.slots)
+                ListTile(
+                  leading: _StatusBadge(
+                    status: overview.statusFor(student.id, slot),
+                  ),
+                  title: Text('Buổi ${slot.number} · ${slot.date}'),
+                  subtitle: Text(
+                    _entryDescription(
+                      overview.entryFor(student.id, slot.number),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showSlotDetail(
+    CourseOverview overview,
+    CourseSlotOverview slot,
+  ) async {
+    final present = overview.students.where((s) {
+      final status = overview.statusFor(s.id, slot);
+      return status == AttendanceStatus.present;
+    }).length;
+    final excused = overview.students
+        .where(
+          (s) => overview.statusFor(s.id, slot) == AttendanceStatus.excused,
+        )
+        .length;
+    final selectedStudent = await showDialog<CourseStudent>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Buổi ${slot.number} · ${slot.date}'),
+        content: SizedBox(
+          width: 680,
+          height: 520,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 10,
+                children: [
+                  Chip(label: Text('Có mặt $present')),
+                  Chip(
+                    label: Text(
+                      'Vắng ${slot.hasOpened ? overview.activeStudentCount - present - excused : 0}',
+                    ),
+                  ),
+                  Chip(label: Text('Có phép $excused')),
+                  Chip(label: Text('Phiên ${slot.sessionIds.length}')),
+                ],
+              ),
+              const Divider(),
+              Expanded(
+                child: ListView(
+                  children: [
+                    for (final student in overview.students)
+                      ListTile(
+                        leading: _StatusBadge(
+                          status: overview.statusFor(student.id, slot),
+                          source: overview
+                              .entryFor(student.id, slot.number)
+                              ?.source,
+                        ),
+                        title: Text(student.displayName),
+                        subtitle: Text(
+                          '${student.studentCode} · ${_entryDescription(overview.entryFor(student.id, slot.number))}',
+                        ),
+                        trailing: slot.hasOpened
+                            ? IconButton(
+                                tooltip: 'Điều chỉnh',
+                                onPressed: () =>
+                                    Navigator.pop(dialogContext, student),
+                                icon: const Icon(Icons.edit_outlined),
+                              )
+                            : null,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () => _exportSlot(overview, slot),
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('Xuất CSV'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+    if (selectedStudent != null && mounted) {
+      await _editAttendance(overview, selectedStudent, slot);
+    }
+  }
+
+  String _entryDescription(AttendanceEntry? entry) {
+    if (entry == null) return 'Chưa có bản ghi';
+    final time = entry.checkedInAt == null
+        ? 'Không có thời gian'
+        : DateFormat('HH:mm:ss dd/MM/yyyy').format(entry.checkedInAt!);
+    return '$time · ${entry.source} · sync: ${entry.syncStatus}';
+  }
+}
+
+String _statusLabel(AttendanceStatus status) => switch (status) {
+  AttendanceStatus.present => 'Có mặt',
+  AttendanceStatus.absent => 'Vắng',
+  AttendanceStatus.excused => 'Có phép',
+  AttendanceStatus.notYetOpen => 'Chưa mở',
+};
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.status, this.source});
+  final AttendanceStatus status;
+  final String? source;
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, color) = switch (status) {
+      AttendanceStatus.present => (Icons.check_circle, const Color(0xFF167052)),
+      AttendanceStatus.absent => (Icons.cancel, const Color(0xFFB5473C)),
+      AttendanceStatus.excused => (Icons.event_busy, const Color(0xFF7C5CBF)),
+      AttendanceStatus.notYetOpen => (Icons.schedule, const Color(0xFF7B898D)),
+    };
+    final sourceLabel = switch (source) {
+      'teacher' => 'Giảng viên chỉnh tay',
+      'policy' => 'Miễn theo chính sách',
+      'qr' => 'QR',
+      _ => null,
+    };
+    return Tooltip(
+      message: sourceLabel == null
+          ? _statusLabel(status)
+          : '${_statusLabel(status)} · $sourceLabel',
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Icon(icon, color: color, size: 22),
+          if (source == 'teacher' || source == 'policy')
+            Positioned(
+              right: -7,
+              bottom: -5,
+              child: Icon(
+                source == 'teacher' ? Icons.edit : Icons.policy,
+                size: 11,
+                color: color,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.warning = false,
+  });
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: warning
+                ? const Color(0xFFFFE9E4)
+                : const Color(0xFFE3F2F4),
+            child: Icon(
+              icon,
+              color: warning
+                  ? const Color(0xFFB5473C)
+                  : const Color(0xFF17658C),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Color(0xFF64777D))),
+              Text(
+                value,
+                style: Theme.of(context).textTheme.headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.w800),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ActiveSlotBanner extends StatelessWidget {
+  const _ActiveSlotBanner({required this.slot, required this.onOpen});
+  final CourseSlotOverview slot;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+    decoration: BoxDecoration(
+      color: const Color(0xFFE4F4EE),
+      border: Border.all(color: const Color(0xFF94CEB8)),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.radio_button_checked, color: Color(0xFF167052)),
+        const SizedBox(width: 12),
+        Text(
+          'Đang điểm danh buổi ${slot.number} · ${slot.date}',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        const Spacer(),
+        FilledButton.tonalIcon(
+          onPressed: onOpen,
+          icon: const Icon(Icons.open_in_new),
+          label: const Text('Mở phiên realtime'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _OverviewEmpty extends StatelessWidget {
+  const _OverviewEmpty();
+  @override
+  Widget build(BuildContext context) => const Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.analytics_outlined, size: 58, color: Color(0xFF789097)),
+        SizedBox(height: 12),
+        Text(
+          'Chọn một môn–lớp để xem tổng quan',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        ),
+        SizedBox(height: 5),
+        Text('Dữ liệu roster, slots và điểm danh sẽ được tổng hợp tại đây.'),
+      ],
+    ),
+  );
+}

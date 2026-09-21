@@ -19,6 +19,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   final _classController = TextEditingController();
   DateTime _startDate = DateTime.now();
   SchedulePreset _preset = SchedulePreset.twentySlotsTenWeeks;
+  int _daySlot = 1;
   bool _submitting = false;
   String? _error;
 
@@ -60,6 +61,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
         classCode: _classController.text,
         startDate: _startDate,
         preset: _preset,
+        daySlot: _daySlot,
       );
       if (mounted) Navigator.of(context).pop(true);
     } catch (error) {
@@ -141,6 +143,24 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                 ],
               ),
               const SizedBox(height: 16),
+              DropdownButtonFormField<int>(
+                initialValue: _daySlot,
+                decoration: const InputDecoration(
+                  labelText: 'Slot trong ngày',
+                  helperText:
+                      'Khác với số thứ tự buổi của môn học (buổi 1/10, 2/10…)',
+                ),
+                items: daySlotDefinitions
+                    .map(
+                      (slot) => DropdownMenuItem(
+                        value: slot.number,
+                        child: Text(slot.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() => _daySlot = value!),
+              ),
+              const SizedBox(height: 16),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
@@ -151,7 +171,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                 child: Text(
                   'Lịch dự kiến: ${DateFormat('dd/MM').format(preview.first.date)} – '
                   '${DateFormat('dd/MM/yyyy').format(preview.last.date)} · '
-                  '${preview.length} slot · bỏ Chủ nhật',
+                  '${preview.length} buổi môn học · Slot $_daySlot trong ngày · bỏ Chủ nhật',
                 ),
               ),
               if (_error != null) ...[

@@ -9,6 +9,39 @@
       ]
     },
     {
+      "collectionGroup": "records",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {"fieldPath": "ownerUid", "order": "ASCENDING"},
+        {"fieldPath": "sessionId", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "records",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {"fieldPath": "ownerUid", "order": "ASCENDING"},
+        {"fieldPath": "syncStatus", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "records",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {"fieldPath": "ownerUid", "order": "ASCENDING"},
+        {"fieldPath": "sessionId", "order": "ASCENDING"},
+        {"fieldPath": "syncStatus", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "students",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "active", "order": "ASCENDING"},
+        {"fieldPath": "attendancePolicy", "order": "ASCENDING"}
+      ]
+    },
+    {
       "collectionGroup": "checkIns",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
