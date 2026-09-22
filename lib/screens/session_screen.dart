@@ -113,6 +113,15 @@ class _SessionScreenState extends State<SessionScreen> {
     }
   }
 
+  String _formatDate(String isoDate) {
+    final parsed = DateTime.tryParse(isoDate);
+    if (parsed == null) return isoDate;
+    final day = parsed.day.toString().padLeft(2, '0');
+    final month = parsed.month.toString().padLeft(2, '0');
+    final year = parsed.year.toString();
+    return '$day/$month/$year';
+  }
+
   Future<void> _stop() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -402,7 +411,7 @@ class _SessionScreenState extends State<SessionScreen> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · Slot ${session.daySlot ?? '—'} · ${session.date}',
+                    'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · Slot ${session.daySlot ?? '—'} · ${_formatDate(session.date)}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -676,7 +685,7 @@ class _SessionScreenState extends State<SessionScreen> {
                 _InfoRowSimple(
                   icon: Icons.calendar_today_outlined,
                   label: 'Ngày học',
-                  value: session.date,
+                  value: _formatDate(session.date),
                   badgeColor: const Color(0xFFF1F5F9),
                   textColor: const Color(0xFF334155),
                 ),
