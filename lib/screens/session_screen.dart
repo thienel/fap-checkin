@@ -677,19 +677,25 @@ class _SessionScreenState extends State<SessionScreen> {
                   icon: Icons.calendar_today_outlined,
                   label: 'Ngày học',
                   value: session.date,
+                  badgeColor: const Color(0xFFF1F5F9),
+                  textColor: const Color(0xFF334155),
                 ),
-                const Divider(height: 18),
+                const SizedBox(height: 8),
                 _InfoRowSimple(
                   icon: Icons.access_time_outlined,
                   label: 'Ca học',
                   value: 'Slot ${session.daySlot ?? '—'}',
+                  badgeColor: const Color(0xFFE0F2FE),
+                  textColor: const Color(0xFF0369A1),
                 ),
-                const Divider(height: 18),
+                const SizedBox(height: 8),
                 _InfoRowSimple(
                   icon: Icons.layers_outlined,
                   label: 'Tiến độ môn',
                   value:
                       'Buổi ${session.slot} / ${session.slotCount > 0 ? session.slotCount : '?'}',
+                  badgeColor: const Color(0xFFCCFBF1),
+                  textColor: const Color(0xFF0F766E),
                 ),
               ],
             ),
@@ -752,48 +758,129 @@ class _SessionScreenState extends State<SessionScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row các thẻ thống kê với thanh cuộn ngang an toàn
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _MetricCard(
-                  label: 'Tổng số sinh viên',
-                  count: '${stats.totalActive}',
-                  icon: Icons.groups_outlined,
-                  color: const Color(0xFF0F766E),
-                  bgColor: const Color(0xFFF0FDFA),
+          // 4 thẻ thống kê trải đều 100% chiều rộng trên desktop
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth >= 600) {
+                return Row(
+                  children: [
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Tổng số sinh viên',
+                        count: '${stats.totalActive}',
+                        icon: Icons.groups_outlined,
+                        color: const Color(0xFF0F766E),
+                        bgColor: const Color(0xFFF0FDFA),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Đã điểm danh',
+                        count: '${stats.presentCount}',
+                        icon: Icons.check_circle_outline_rounded,
+                        color: const Color(0xFF059669),
+                        bgColor: const Color(0xFFECFDF5),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Chưa điểm danh',
+                        count: '${stats.notYetOpenCount}',
+                        icon: Icons.pending_outlined,
+                        color: const Color(0xFFD97706),
+                        bgColor: const Color(0xFFFFFBEB),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _MetricCard(
+                        label: 'Có phép / Vắng',
+                        count: '${stats.excusedCount + stats.absentCount}',
+                        icon: Icons.event_busy_outlined,
+                        color: const Color(0xFF7C3AED),
+                        bgColor: const Color(0xFFF5F3FF),
+                      ),
+                    ),
+                  ],
+                );
+              }
+              // Màn hình hẹp thì cho phép cuộn ngang mượt mà
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _MetricCard(
+                      label: 'Tổng số sinh viên',
+                      count: '${stats.totalActive}',
+                      icon: Icons.groups_outlined,
+                      color: const Color(0xFF0F766E),
+                      bgColor: const Color(0xFFF0FDFA),
+                    ),
+                    const SizedBox(width: 12),
+                    _MetricCard(
+                      label: 'Đã điểm danh',
+                      count: '${stats.presentCount}',
+                      icon: Icons.check_circle_outline_rounded,
+                      color: const Color(0xFF059669),
+                      bgColor: const Color(0xFFECFDF5),
+                    ),
+                    const SizedBox(width: 12),
+                    _MetricCard(
+                      label: 'Chưa điểm danh',
+                      count: '${stats.notYetOpenCount}',
+                      icon: Icons.pending_outlined,
+                      color: const Color(0xFFD97706),
+                      bgColor: const Color(0xFFFFFBEB),
+                    ),
+                    const SizedBox(width: 12),
+                    _MetricCard(
+                      label: 'Có phép / Vắng',
+                      count: '${stats.excusedCount + stats.absentCount}',
+                      icon: Icons.event_busy_outlined,
+                      color: const Color(0xFF7C3AED),
+                      bgColor: const Color(0xFFF5F3FF),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 14),
-                _MetricCard(
-                  label: 'Đã điểm danh',
-                  count: '${stats.presentCount}',
-                  icon: Icons.check_circle_outline_rounded,
-                  color: const Color(0xFF059669),
-                  bgColor: const Color(0xFFECFDF5),
-                ),
-                const SizedBox(width: 14),
-                _MetricCard(
-                  label: 'Chưa điểm danh',
-                  count: '${stats.notYetOpenCount}',
-                  icon: Icons.pending_outlined,
-                  color: const Color(0xFFD97706),
-                  bgColor: const Color(0xFFFFFBEB),
-                ),
-                const SizedBox(width: 14),
-                _MetricCard(
-                  label: 'Có phép / Vắng',
-                  count: '${stats.excusedCount + stats.absentCount}',
-                  icon: Icons.event_busy_outlined,
-                  color: const Color(0xFF7C3AED),
-                  bgColor: const Color(0xFFF5F3FF),
-                ),
-                if (hasSyncError) ...[
-                  const SizedBox(width: 20),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
+              );
+            },
+          ),
+          if (hasSyncError) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF1F2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFFECDD3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.sync_problem,
+                    size: 18,
+                    color: Color(0xFFE11D48),
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Có lỗi đồng bộ Google Sheets ở một số lượt điểm danh.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFFE11D48),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
                       foregroundColor: const Color(0xFFE11D48),
-                      side: const BorderSide(color: Color(0xFFE11D48)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                     ),
                     onPressed: _retryingSync ? null : _retrySheetSync,
                     icon: _retryingSync
@@ -801,13 +888,19 @@ class _SessionScreenState extends State<SessionScreen> {
                             dimension: 14,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.sync_problem, size: 18),
-                    label: const Text('Đồng bộ lại Sheets'),
+                        : const Icon(Icons.refresh_rounded, size: 16),
+                    label: const Text(
+                      'Thử lại ngay',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ],
-              ],
+              ),
             ),
-          ),
+          ],
           const SizedBox(height: 16),
           // Thanh Progress bar tỷ lệ
           Row(
@@ -1722,7 +1815,7 @@ class _MetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(12),
@@ -1730,28 +1823,33 @@ class _MetricCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(icon, size: 22, color: color),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                count,
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                  color: color,
+          Icon(icon, size: 20, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  count,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                  ),
                 ),
-              ),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: color.withValues(alpha: 0.8),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: color.withValues(alpha: 0.8),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -1805,36 +1903,65 @@ class _InfoRowSimple extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    this.badgeColor = const Color(0xFFF1F5F9),
+    this.textColor = const Color(0xFF0F172A),
   });
 
   final IconData icon;
   final String label;
   final String value;
+  final Color badgeColor;
+  final Color textColor;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: const Color(0xFF0F766E)),
-        const SizedBox(width: 10),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
-        ),
-        const Spacer(),
-        Flexible(
-          child: Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF0F172A),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: const Color(0xFF0F766E)),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF64748B),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: badgeColor,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: textColor,
+                ),
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
