@@ -1,48 +1,93 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../domain/class_overview.dart';
+import '../domain/live_attendance.dart';
 import '../domain/models.dart';
 import '../services/attendance_api.dart';
+import '../services/live_session_service.dart';
+
+enum AttendanceFilter {
+  all,
+  present,
+  notYetOpen,
+  other, // absent or excused
+}
 
 class SessionScreen extends StatefulWidget {
-  const SessionScreen({super.key, required this.api, required this.session});
+  const SessionScreen({
+    super.key,
+    required this.api,
+    required this.session,
+    this.liveSessionService,
+  });
 
   final AttendanceApi api;
   final AttendanceSession session;
+  final LiveSessionService? liveSessionService;
 
   @override
   State<SessionScreen> createState() => _SessionScreenState();
 }
 
 class _SessionScreenState extends State<SessionScreen> {
+  late final LiveSessionService _service;
+  late final Stream<LiveAttendanceState> _liveStream;
+
   Timer? _rotationTimer;
-  late final Stream<List<CheckInRecord>> _checkIns;
+  Timer? _countdownTimer;
+
   IssuedQr? _qr;
+  final ValueNotifier<IssuedQr?> _qrNotifier = ValueNotifier<IssuedQr?>(null);
+  late final ValueNotifier<int> _secondsLeftNotifier;
+
   bool _issuing = false;
   bool _stopping = false;
   bool _retryingSync = false;
   String? _error;
 
+  String _searchQuery = '';
+  AttendanceFilter _selectedFilter = AttendanceFilter.all;
+
   @override
   void initState() {
     super.initState();
-    // Keep one subscription for the lifetime of this screen. QR rotation must
-    // not unsubscribe/resubscribe and reset the attendance list.
-    _checkIns = widget.api.watchSessionCheckIns(widget.session);
+    _service =
+        widget.liveSessionService ?? LiveSessionService(api: widget.api);
+
+    // Một subscription duy nhất cho toàn bộ vòng đời của màn hình.
+    // Xoay QR tuyệt đối không unsubscribe hoặc reset stream danh sách.
+    _liveStream = _service.watchLiveAttendance(session: widget.session);
+
+    _secondsLeftNotifier =
+        ValueNotifier<int>(widget.session.rotationSeconds);
+
     _issueQr();
+
+    // Timer xoay mã QR theo chu kỳ
     _rotationTimer = Timer.periodic(
       Duration(seconds: widget.session.rotationSeconds),
       (_) => _issueQr(),
     );
+
+    // Timer đếm ngược giây hiển thị trên UI
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_secondsLeftNotifier.value > 0) {
+        _secondsLeftNotifier.value -= 1;
+      }
+    });
   }
 
   @override
   void dispose() {
     _rotationTimer?.cancel();
+    _countdownTimer?.cancel();
+    _qrNotifier.dispose();
+    _secondsLeftNotifier.dispose();
     super.dispose();
   }
 
@@ -54,19 +99,55 @@ class _SessionScreenState extends State<SessionScreen> {
       if (mounted) {
         setState(() {
           _qr = qr;
+          _qrNotifier.value = qr;
+          _secondsLeftNotifier.value = widget.session.rotationSeconds;
           _error = null;
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = 'Không tạo được QR mới: $error');
+      if (mounted) {
+        setState(() => _error = 'Không tạo được QR mới: $error');
+      }
     } finally {
       _issuing = false;
     }
   }
 
   Future<void> _stop() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Color(0xFFE11D48)),
+            SizedBox(width: 10),
+            Text('Ngừng điểm danh?'),
+          ],
+        ),
+        content: const Text(
+          'Khi ngừng điểm danh, sinh viên sẽ không thể quét mã trong buổi học này nữa. Bạn có chắc chắn muốn kết thúc?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Tiếp tục điểm danh'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFE11D48),
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Xác nhận ngừng'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
     setState(() => _stopping = true);
     _rotationTimer?.cancel();
+    _countdownTimer?.cancel();
     try {
       await widget.api.stopAttendance(widget.session.id);
       if (mounted) Navigator.of(context).pop();
@@ -83,45 +164,62 @@ class _SessionScreenState extends State<SessionScreen> {
     if (_retryingSync) return;
     setState(() => _retryingSync = true);
     try {
-      // The slot may have been reopened with a new session ID while its
-      // immutable check-in records still reference an earlier session.
       await widget.api.syncPendingCheckIns();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Đã thử đồng bộ lại Google Sheets.')),
+        const SnackBar(
+          content: Text('Đã yêu cầu đồng bộ lại với Google Sheets.'),
+          backgroundColor: Color(0xFF0F766E),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đồng bộ Google Sheets thất bại: $error')),
+        SnackBar(
+          content: Text('Đồng bộ Google Sheets thất bại: $error'),
+          backgroundColor: const Color(0xFFE11D48),
+        ),
       );
     } finally {
       if (mounted) setState(() => _retryingSync = false);
     }
   }
 
-  void _showStudentDetail(CheckInRecord record) {
+  void _openFullscreenQr() {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.85),
+      builder: (dialogContext) => _FullscreenQrDialog(
+        session: widget.session,
+        qrNotifier: _qrNotifier,
+        countdownNotifier: _secondsLeftNotifier,
+      ),
+    );
+  }
+
+  void _showStudentDetail(CourseStudent student) {
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Row(
           children: [
-            Icon(Icons.badge_outlined),
+            Icon(Icons.badge_outlined, color: Color(0xFF0F766E)),
             SizedBox(width: 10),
-            Text('Thông tin sinh viên'),
+            Text('Hồ sơ chuyên cần sinh viên'),
           ],
         ),
         content: SizedBox(
-          width: 480,
+          width: 500,
           child: FutureBuilder<StudentAttendanceDetail>(
             future: widget.api.getStudentAttendanceDetail(
               courseClassId: widget.session.courseClassId,
-              studentId: record.studentId,
+              studentId: student.id,
             ),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const SizedBox(
-                  height: 190,
+                  height: 200,
                   child: Center(child: CircularProgressIndicator()),
                 );
               }
@@ -132,21 +230,21 @@ class _SessionScreenState extends State<SessionScreen> {
                     _StudentInfoRow(
                       icon: Icons.person_outline,
                       label: 'Họ tên',
-                      value: record.fullName,
+                      value: student.fullName,
                     ),
                     _StudentInfoRow(
                       icon: Icons.alternate_email,
                       label: 'Email',
-                      value: record.email,
+                      value: student.email,
                     ),
                     _StudentInfoRow(
                       icon: Icons.badge_outlined,
-                      label: 'Mã sinh viên',
-                      value: record.studentCode,
+                      label: 'Mã số SV',
+                      value: student.studentCode,
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
                     Text(
-                      'Không tải được thống kê: ${snapshot.error}',
+                      'Không tải được lịch sử: ${snapshot.error}',
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.error,
                       ),
@@ -154,14 +252,20 @@ class _SessionScreenState extends State<SessionScreen> {
                   ],
                 );
               }
-              final detail = snapshot.requireData;
+
+              final detail = snapshot.data!;
+              final ratePercent = detail.totalSlots > 0
+                  ? '${((detail.attendedSlots / detail.totalSlots) * 100).toStringAsFixed(1)}%'
+                  : '0%';
+
               return Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _StudentInfoRow(
                     icon: Icons.person_outline,
                     label: 'Họ tên',
-                    value: detail.student.displayName,
+                    value: detail.student.fullName,
                   ),
                   _StudentInfoRow(
                     icon: Icons.alternate_email,
@@ -170,53 +274,68 @@ class _SessionScreenState extends State<SessionScreen> {
                   ),
                   _StudentInfoRow(
                     icon: Icons.badge_outlined,
-                    label: 'Mã sinh viên',
+                    label: 'Mã số SV',
                     value: detail.student.studentCode,
                   ),
-                  const Divider(height: 28),
+                  const SizedBox(height: 16),
                   Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(18),
+                    padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE8F3F6),
+                      color: const Color(0xFFF0FDFA),
                       borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFCCFBF1)),
                     ),
                     child: Row(
                       children: [
-                        const Icon(
-                          Icons.how_to_reg_outlined,
-                          color: Color(0xFF17658C),
-                          size: 32,
-                        ),
-                        const SizedBox(width: 14),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '${detail.attendedSlots}/${detail.totalSlots}',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .headlineMedium
-                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              const Text(
+                                'Tỷ lệ có mặt',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Color(0xFF0F766E),
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                              const Text('slot đã điểm danh / tổng slot'),
+                              const SizedBox(height: 4),
+                              Text(
+                                ratePercent,
+                                style: const TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF0F766E),
+                                ),
+                              ),
+                              Text(
+                                '${detail.attendedSlots} / ${detail.totalSlots} buổi',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF64748B),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          height: 50,
+                          width: 1,
+                          color: const Color(0xFFCCFBF1),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Đã mở: ${detail.openedSlots} buổi'),
+                              const SizedBox(height: 4),
+                              Text('Có phép: ${detail.excusedSlots} buổi'),
                             ],
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Đã mở: ${detail.openedSlots}/${detail.totalSlots}',
-                        ),
-                      ),
-                      Text('Có phép: ${detail.excusedSlots}'),
-                    ],
                   ),
                 ],
               );
@@ -224,7 +343,7 @@ class _SessionScreenState extends State<SessionScreen> {
           ),
         ),
         actions: [
-          TextButton(
+          FilledButton.tonal(
             onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Đóng'),
           ),
@@ -239,272 +358,1344 @@ class _SessionScreenState extends State<SessionScreen> {
     return PopScope(
       canPop: false,
       child: Scaffold(
+        backgroundColor: const Color(0xFFF8FAFC),
         appBar: AppBar(
           automaticallyImplyLeading: false,
-          title: Text('${session.subject} · ${session.classCode}'),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 20),
-              child: FilledButton.tonalIcon(
-                onPressed: _stopping ? null : _stop,
-                icon: _stopping
-                    ? const SizedBox.square(
-                        dimension: 17,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.stop_circle_outlined),
-                label: const Text('Ngừng điểm danh'),
-              ),
-            ),
-          ],
-        ),
-        body: Padding(
-          padding: const EdgeInsets.fromLTRB(36, 24, 36, 36),
-          child: Row(
+          elevation: 0,
+          backgroundColor: Colors.white,
+          foregroundColor: const Color(0xFF0F172A),
+          title: Row(
             children: [
-              Expanded(
-                flex: 3,
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(30),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (_qr == null)
-                          const SizedBox.square(
-                            dimension: 300,
-                            child: Center(child: CircularProgressIndicator()),
-                          )
-                        else
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            color: Colors.white,
-                            child: QrImageView(
-                              data: _qr!.url,
-                              version: QrVersions.auto,
-                              size: 330,
-                              gapless: false,
-                            ),
-                          ),
-                        const SizedBox(height: 18),
-                        Text(
-                          _qr == null ? 'Đang lấy QR…' : 'QR đang hoạt động',
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(
-                                color: const Color(0xFF245B6B),
-                                fontWeight: FontWeight.w700,
-                              ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'QR tự động đổi mỗi ${session.rotationSeconds} giây · '
-                          'mỗi mã có hiệu lực ${session.validitySeconds} giây',
-                        ),
-                        if (_error != null) ...[
-                          const SizedBox(height: 14),
-                          Text(
-                            _error!,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.error,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-              ),
-              const SizedBox(width: 24),
-              Expanded(
-                flex: 2,
-                child: Column(
+                child: Row(
                   children: [
-                    _InfoCard(
-                      icon: Icons.menu_book_outlined,
-                      label: 'Môn học · Lớp',
-                      value: '${session.subject} · ${session.classCode}',
+                    const Icon(
+                      Icons.qr_code_2_rounded,
+                      size: 20,
+                      color: Color(0xFF0F766E),
                     ),
-                    const SizedBox(height: 14),
-                    _InfoCard(
-                      icon: Icons.event_note_outlined,
-                      label: 'Buổi học',
-                      value:
-                          'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · ${session.date}',
-                    ),
-                    if (session.daySlot != null) ...[
-                      const SizedBox(height: 14),
-                      _InfoCard(
-                        icon: Icons.schedule_outlined,
-                        label: 'Khung giờ trong ngày',
-                        value: 'Slot ${session.daySlot}',
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    Expanded(
-                      child: StreamBuilder<List<CheckInRecord>>(
-                        stream: _checkIns,
-                        builder: (context, snapshot) {
-                          if (snapshot.hasError) {
-                            return Card(
-                              child: Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(24),
-                                  child: Text(
-                                    'Không tải được danh sách điểm danh:\n${snapshot.error}',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .error,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          }
-                          final records =
-                              snapshot.data ?? const <CheckInRecord>[];
-                          final hasSyncError = records.any(
-                            (record) => record.syncStatus == 'error',
-                          );
-                          final presentCount = records
-                              .where(
-                                (record) =>
-                                    record.attendanceStatus == 'present',
-                              )
-                              .length;
-                          return Card(
-                            clipBehavior: Clip.antiAlias,
-                            child: Column(
-                              children: [
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 20,
-                                    vertical: 15,
-                                  ),
-                                  color: const Color(0xFF164E63),
-                                  child: Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.how_to_reg_outlined,
-                                        color: Colors.white,
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Text(
-                                        '$presentCount có mặt · ${records.length - presentCount} trạng thái khác',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      if (hasSyncError)
-                                        TextButton.icon(
-                                          style: TextButton.styleFrom(
-                                            foregroundColor: Colors.white,
-                                          ),
-                                          onPressed: _retryingSync
-                                              ? null
-                                              : _retrySheetSync,
-                                          icon: _retryingSync
-                                              ? const SizedBox.square(
-                                                  dimension: 16,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                        color: Colors.white,
-                                                      ),
-                                                )
-                                              : const Icon(Icons.sync_problem),
-                                          label: const Text('Thử đồng bộ lại'),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                                Expanded(
-                                  child:
-                                      snapshot.connectionState ==
-                                          ConnectionState.waiting
-                                      ? const Center(
-                                          child: CircularProgressIndicator(),
-                                        )
-                                      : records.isEmpty
-                                      ? const Center(
-                                          child: Padding(
-                                            padding: EdgeInsets.all(20),
-                                            child: Text(
-                                              'Chưa có sinh viên check-in.',
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ),
-                                        )
-                                      : ListView.separated(
-                                          itemCount: records.length,
-                                          separatorBuilder: (_, _) =>
-                                              const Divider(height: 1),
-                                          itemBuilder: (context, index) {
-                                            final record = records[index];
-                                            final syncColor =
-                                                record.syncStatus == 'synced'
-                                                ? const Color(0xFF167052)
-                                                : record.syncStatus == 'error'
-                                                ? const Color(0xFFB5473C)
-                                                : const Color(0xFF9A6B13);
-                                            return ListTile(
-                                              dense: true,
-                                              onTap: () =>
-                                                  _showStudentDetail(record),
-                                              leading: CircleAvatar(
-                                                child: Text('${index + 1}'),
-                                              ),
-                                              title: Text(
-                                                record.fullName.isEmpty
-                                                    ? record.email
-                                                    : record.fullName,
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                              subtitle: Text(
-                                                '${record.studentCode.isEmpty ? record.email : record.studentCode} · '
-                                                '${_attendanceStatusLabel(record.attendanceStatus)} · '
-                                                '${record.checkedInAt == null ? 'Không có giờ check-in' : DateFormat('HH:mm:ss').format(record.checkedInAt!)}',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                              trailing: Tooltip(
-                                                message:
-                                                    record.syncError == null
-                                                    ? 'Nguồn ${record.source} · ${record.syncStatus}'
-                                                    : 'Lỗi đồng bộ: ${record.syncError}',
-                                                child: Icon(
-                                                  record.syncStatus == 'synced'
-                                                      ? Icons
-                                                            .cloud_done_outlined
-                                                      : record.syncStatus ==
-                                                            'error'
-                                                      ? Icons.cloud_off_outlined
-                                                      : Icons
-                                                            .cloud_upload_outlined,
-                                                  color: syncColor,
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                    const SizedBox(width: 8),
+                    Text(
+                      '${session.subject} · ${session.classCode}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0F172A),
                       ),
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE0F2FE),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · Slot ${session.daySlot ?? '—'} · ${session.date}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF0369A1),
+                    ),
+                  ),
+                ),
+              ),
             ],
+          ),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: FilledButton.tonalIcon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFF0FDFA),
+                  foregroundColor: const Color(0xFF0F766E),
+                ),
+                onPressed: _openFullscreenQr,
+                icon: const Icon(Icons.fullscreen, size: 20),
+                label: const Text(
+                  'Phóng to QR',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Padding(
+              padding: const EdgeInsets.only(right: 20, top: 8, bottom: 8),
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFE11D48),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _stopping ? null : _stop,
+                icon: _stopping
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.stop_circle_outlined, size: 20),
+                label: const Text(
+                  'Ngừng điểm danh',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ],
+        ),
+        body: StreamBuilder<LiveAttendanceState>(
+          stream: _liveStream,
+          builder: (context, snapshot) {
+            final state = snapshot.data ?? const LiveAttendanceLoading();
+
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final isDesktopWide = constraints.maxWidth >= 960;
+
+                if (isDesktopWide) {
+                  return Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Cột trái: Control & QR Panel (chiếm ~30%)
+                        SizedBox(
+                          width: 340,
+                          child: _buildControlSidePanel(context),
+                        ),
+                        const SizedBox(width: 24),
+                        // Cột phải: Command Center (chiếm ~70% trung tâm)
+                        Expanded(
+                          child: _buildMainContent(context, state),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                // Khi cửa sổ bị thu nhỏ: bố cục cột cuộn dọc, không overflow
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      _buildControlSidePanel(context),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        height: 600,
+                        child: _buildMainContent(context, state),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Cột điều khiển và hiển thị QR bên trái
+  Widget _buildControlSidePanel(BuildContext context) {
+    final session = widget.session;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Card QR động
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFFE2E8F0)),
+          ),
+          color: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                // Header card
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.fiber_manual_record,
+                      size: 12,
+                      color: Color(0xFF10B981),
+                    ),
+                    const SizedBox(width: 5),
+                    const Text(
+                      'Trực tiếp',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF0F766E),
+                      ),
+                    ),
+                    const Spacer(),
+                    ValueListenableBuilder<int>(
+                      valueListenable: _secondsLeftNotifier,
+                      builder: (context, seconds, _) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF1F5F9),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            'Đổi sau: ${seconds.toString().padLeft(2, '0')}s',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF475569),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // QR Container
+                if (_qr == null)
+                  const SizedBox.square(
+                    dimension: 230,
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(strokeWidth: 3),
+                          SizedBox(height: 12),
+                          Text('Đang nạp mã QR…'),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.04),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: QrImageView(
+                      data: _qr!.url,
+                      version: QrVersions.auto,
+                      size: 220,
+                      gapless: false,
+                    ),
+                  ),
+                const SizedBox(height: 16),
+                // Nút Phóng to QR
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF0F766E),
+                      side: const BorderSide(color: Color(0xFF0F766E)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    onPressed: _openFullscreenQr,
+                    icon: const Icon(Icons.fullscreen, size: 20),
+                    label: const Text(
+                      'Phóng to cho máy chiếu',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Tự đổi mã mỗi ${session.rotationSeconds}s · Hiệu lực ${session.validitySeconds}s',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFE4E6),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFFE11D48),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        // Card thông tin nhanh
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFFE2E8F0)),
+          ),
+          color: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                _InfoRowSimple(
+                  icon: Icons.calendar_today_outlined,
+                  label: 'Ngày học',
+                  value: session.date,
+                ),
+                const Divider(height: 18),
+                _InfoRowSimple(
+                  icon: Icons.access_time_outlined,
+                  label: 'Ca học',
+                  value: 'Slot ${session.daySlot ?? '—'}',
+                ),
+                const Divider(height: 18),
+                _InfoRowSimple(
+                  icon: Icons.layers_outlined,
+                  label: 'Tiến độ môn',
+                  value:
+                      'Buổi ${session.slot} / ${session.slotCount > 0 ? session.slotCount : '?'}',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Khu vực nội dung chính chiếm 70% trung tâm
+  Widget _buildMainContent(BuildContext context, LiveAttendanceState state) {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xFFE2E8F0)),
+      ),
+      color: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Thống kê nhanh & Progress bar
+          _buildStatsHeader(state),
+          const Divider(height: 1),
+          // Thanh tìm kiếm và bộ lọc trạng thái
+          _buildSearchAndFilterBar(state),
+          const Divider(height: 1),
+          // Bảng danh sách sinh viên
+          Expanded(
+            child: _buildStudentListBody(state),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Thanh thống kê số liệu và tỷ lệ chuyên cần
+  Widget _buildStatsHeader(LiveAttendanceState state) {
+    if (state is! LiveAttendanceLoaded) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        child: const Row(
+          children: [
+            Text(
+              'Đang chuẩn bị dữ liệu lớp học…',
+              style: TextStyle(color: Color(0xFF64748B)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final stats = state.stats;
+    final hasSyncError = state.students.any((s) => s.syncStatus == 'error');
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      color: Colors.white,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Row các thẻ thống kê với thanh cuộn ngang an toàn
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _MetricCard(
+                  label: 'Tổng số sinh viên',
+                  count: '${stats.totalActive}',
+                  icon: Icons.groups_outlined,
+                  color: const Color(0xFF0F766E),
+                  bgColor: const Color(0xFFF0FDFA),
+                ),
+                const SizedBox(width: 14),
+                _MetricCard(
+                  label: 'Đã điểm danh',
+                  count: '${stats.presentCount}',
+                  icon: Icons.check_circle_outline_rounded,
+                  color: const Color(0xFF059669),
+                  bgColor: const Color(0xFFECFDF5),
+                ),
+                const SizedBox(width: 14),
+                _MetricCard(
+                  label: 'Chưa điểm danh',
+                  count: '${stats.notYetOpenCount}',
+                  icon: Icons.pending_outlined,
+                  color: const Color(0xFFD97706),
+                  bgColor: const Color(0xFFFFFBEB),
+                ),
+                const SizedBox(width: 14),
+                _MetricCard(
+                  label: 'Có phép / Vắng',
+                  count: '${stats.excusedCount + stats.absentCount}',
+                  icon: Icons.event_busy_outlined,
+                  color: const Color(0xFF7C3AED),
+                  bgColor: const Color(0xFFF5F3FF),
+                ),
+                if (hasSyncError) ...[
+                  const SizedBox(width: 20),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFE11D48),
+                      side: const BorderSide(color: Color(0xFFE11D48)),
+                    ),
+                    onPressed: _retryingSync ? null : _retrySheetSync,
+                    icon: _retryingSync
+                        ? const SizedBox.square(
+                            dimension: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.sync_problem, size: 18),
+                    label: const Text('Đồng bộ lại Sheets'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Thanh Progress bar tỷ lệ
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: stats.rate,
+                    minHeight: 8,
+                    backgroundColor: const Color(0xFFE2E8F0),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFF059669),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Tỷ lệ có mặt: ${stats.percentageFormatted}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F766E),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Thanh tìm kiếm và các Chip lọc trạng thái
+  Widget _buildSearchAndFilterBar(LiveAttendanceState state) {
+    int totalCount = 0;
+    int presentCount = 0;
+    int notYetCount = 0;
+    int otherCount = 0;
+
+    if (state is LiveAttendanceLoaded) {
+      totalCount = state.stats.totalActive;
+      presentCount = state.stats.presentCount;
+      notYetCount = state.stats.notYetOpenCount;
+      otherCount = state.stats.excusedCount + state.stats.absentCount;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      color: const Color(0xFFF8FAFC),
+      child: Row(
+        children: [
+          // Ô tìm kiếm
+          Expanded(
+            flex: 3,
+            child: SizedBox(
+              height: 38,
+              child: TextField(
+                onChanged: (val) => setState(() => _searchQuery = val),
+                decoration: InputDecoration(
+                  hintText: 'Tìm kiếm theo MSSV, Họ tên hoặc Email…',
+                  hintStyle: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF94A3B8),
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.search,
+                    size: 18,
+                    color: Color(0xFF64748B),
+                  ),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 16),
+                          onPressed: () => setState(() => _searchQuery = ''),
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: EdgeInsets.zero,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF0F766E),
+                      width: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Filter chips cuộn ngang linh hoạt
+          Expanded(
+            flex: 4,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _FilterChip(
+                    label: 'Tất cả ($totalCount)',
+                    isSelected: _selectedFilter == AttendanceFilter.all,
+                    onSelected: () =>
+                        setState(() => _selectedFilter = AttendanceFilter.all),
+                  ),
+                  const SizedBox(width: 8),
+                  _FilterChip(
+                    label: 'Đã điểm danh ($presentCount)',
+                    isSelected: _selectedFilter == AttendanceFilter.present,
+                    color: const Color(0xFF059669),
+                    onSelected: () => setState(
+                        () => _selectedFilter = AttendanceFilter.present),
+                  ),
+                  const SizedBox(width: 8),
+                  _FilterChip(
+                    label: 'Chưa điểm danh ($notYetCount)',
+                    isSelected: _selectedFilter == AttendanceFilter.notYetOpen,
+                    color: const Color(0xFFD97706),
+                    onSelected: () => setState(
+                        () => _selectedFilter = AttendanceFilter.notYetOpen),
+                  ),
+                  const SizedBox(width: 8),
+                  _FilterChip(
+                    label: 'Vắng/Phép ($otherCount)',
+                    isSelected: _selectedFilter == AttendanceFilter.other,
+                    color: const Color(0xFF7C3AED),
+                    onSelected: () => setState(
+                        () => _selectedFilter = AttendanceFilter.other),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Danh sách sinh viên
+  Widget _buildStudentListBody(LiveAttendanceState state) {
+    if (state is LiveAttendanceLoading) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(strokeWidth: 3),
+            SizedBox(height: 16),
+            Text(
+              'Đang tải danh sách lớp học…',
+              style: TextStyle(color: Color(0xFF64748B)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (state is LiveAttendanceError) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline_rounded,
+                size: 48,
+                color: Color(0xFFE11D48),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                state.message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFFE11D48)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (state is LiveAttendanceEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.people_outline_rounded,
+                size: 48,
+                color: Color(0xFF94A3B8),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                state.message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final loaded = state as LiveAttendanceLoaded;
+    final query = _searchQuery.trim().toLowerCase();
+
+    // Lọc theo tìm kiếm và filter chip
+    final filtered = loaded.students.where((item) {
+      // 1. Lọc theo trạng thái chip
+      switch (_selectedFilter) {
+        case AttendanceFilter.present:
+          if (!item.isPresent) return false;
+          break;
+        case AttendanceFilter.notYetOpen:
+          if (!item.isNotYetOpen) return false;
+          break;
+        case AttendanceFilter.other:
+          if (item.isPresent || item.isNotYetOpen) return false;
+          break;
+        case AttendanceFilter.all:
+          break;
+      }
+
+      // 2. Lọc theo chuỗi tìm kiếm
+      if (query.isEmpty) return true;
+      return item.studentCode.toLowerCase().contains(query) ||
+          item.fullName.toLowerCase().contains(query) ||
+          item.email.toLowerCase().contains(query);
+    }).toList();
+
+    if (filtered.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text(
+            'Không tìm thấy sinh viên nào phù hợp với bộ lọc.',
+            style: TextStyle(color: Color(0xFF64748B), fontSize: 15),
+          ),
+        ),
+      );
+    }
+
+    // Hiển thị dạng bảng ảo hóa (ListView.builder) cho hiệu năng 60 FPS
+    return Column(
+      children: [
+        // Bảng header
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
+          color: const Color(0xFFF1F5F9),
+          child: const Row(
+            children: [
+              SizedBox(
+                width: 44,
+                child: Text(
+                  'STT',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    color: Color(0xFF475569),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 110,
+                child: Text(
+                  'MSSV',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    color: Color(0xFF475569),
+                  ),
+                ),
+              ),
+              Expanded(
+                flex: 3,
+                child: Text(
+                  'Họ và tên',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    color: Color(0xFF475569),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 150,
+                child: Text(
+                  'Trạng thái',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    color: Color(0xFF475569),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 110,
+                child: Text(
+                  'Giờ quét',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    color: Color(0xFF475569),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 80,
+                child: Text(
+                  'Sheets',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    color: Color(0xFF475569),
+                  ),
+                ),
+              ),
+              SizedBox(width: 40),
+            ],
+          ),
+        ),
+        // Danh sách sinh viên
+        Expanded(
+          child: ListView.separated(
+            itemCount: filtered.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final item = filtered[index];
+              return _StudentListTile(
+                index: index + 1,
+                item: item,
+                onTap: () => _showStudentDetail(item.student),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Dòng hiển thị thông tin sinh viên với hiệu ứng highlight
+class _StudentListTile extends StatelessWidget {
+  const _StudentListTile({
+    required this.index,
+    required this.item,
+    required this.onTap,
+  });
+
+  final int index;
+  final LiveStudentAttendance item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isRecent = item.isRecent;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
+      color: isRecent ? const Color(0xFFECFDF5) : Colors.transparent,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      child: Row(
+        children: [
+          // STT
+          SizedBox(
+            width: 44,
+            child: Text(
+              index.toString().padLeft(2, '0'),
+              style: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          // MSSV
+          SizedBox(
+            width: 110,
+            child: Text(
+              item.studentCode.isEmpty ? '—' : item.studentCode,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+          ),
+          // Họ tên & email
+          Expanded(
+            flex: 3,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        item.fullName.isEmpty
+                            ? item.email
+                            : item.fullName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight:
+                              isRecent ? FontWeight.w800 : FontWeight.w600,
+                          color: const Color(0xFF0F172A),
+                        ),
+                      ),
+                    ),
+                    if (isRecent) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'Vừa quét',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                Text(
+                  item.email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Trạng thái điểm danh (Badge)
+          SizedBox(
+            width: 150,
+            child: _buildStatusBadge(item.status),
+          ),
+          // Giờ quét
+          SizedBox(
+            width: 110,
+            child: Text(
+              item.formattedCheckInTime,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: item.isPresent
+                    ? const Color(0xFF0F172A)
+                    : const Color(0xFF94A3B8),
+              ),
+            ),
+          ),
+          // Trạng thái Google Sheets
+          SizedBox(
+            width: 80,
+            child: Center(
+              child: _buildSyncIcon(item.syncStatus, item.syncError),
+            ),
+          ),
+          // Nút xem chi tiết
+          SizedBox(
+            width: 40,
+            child: IconButton(
+              icon: const Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: Color(0xFF94A3B8),
+              ),
+              onPressed: onTap,
+              tooltip: 'Xem hồ sơ sinh viên',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusBadge(AttendanceStatus status) {
+    Widget badge;
+    switch (status) {
+      case AttendanceStatus.present:
+        badge = Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFECFDF5),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFA7F3D0)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.check_circle_rounded,
+                size: 14,
+                color: Color(0xFF059669),
+              ),
+              SizedBox(width: 4),
+              Text(
+                'Đã điểm danh',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF059669),
+                ),
+              ),
+            ],
+          ),
+        );
+        break;
+      case AttendanceStatus.notYetOpen:
+        badge = Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFFBEB),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFFDE68A)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.hourglass_empty_rounded,
+                size: 14,
+                color: Color(0xFFD97706),
+              ),
+              SizedBox(width: 4),
+              Text(
+                'Chưa điểm danh',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFD97706),
+                ),
+              ),
+            ],
+          ),
+        );
+        break;
+      case AttendanceStatus.excused:
+        badge = Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF5F3FF),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFDDD6FE)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.verified_user_rounded,
+                size: 14,
+                color: Color(0xFF7C3AED),
+              ),
+              SizedBox(width: 4),
+              Text(
+                'Có phép',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF7C3AED),
+                ),
+              ),
+            ],
+          ),
+        );
+        break;
+      case AttendanceStatus.absent:
+        badge = Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFE4E6),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFFECDD3)),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.cancel_rounded,
+                size: 14,
+                color: Color(0xFFE11D48),
+              ),
+              SizedBox(width: 4),
+              Text(
+                'Vắng mặt',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFE11D48),
+                ),
+              ),
+            ],
+          ),
+        );
+        break;
+    }
+
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: badge,
+    );
+  }
+
+  Widget _buildSyncIcon(String? syncStatus, String? syncError) {
+    if (syncStatus == null) {
+      return const Text('—', style: TextStyle(color: Color(0xFF94A3B8)));
+    }
+
+    if (syncStatus == 'synced') {
+      return const Tooltip(
+        message: 'Đã đồng bộ sang Google Sheets',
+        child: Icon(
+          Icons.cloud_done_rounded,
+          size: 18,
+          color: Color(0xFF059669),
+        ),
+      );
+    }
+
+    if (syncStatus == 'error') {
+      return Tooltip(
+        message: 'Lỗi đồng bộ: ${syncError ?? "Không rõ"}',
+        child: const Icon(
+          Icons.cloud_off_rounded,
+          size: 18,
+          color: Color(0xFFE11D48),
+        ),
+      );
+    }
+
+    return const Tooltip(
+      message: 'Đang chờ đồng bộ Google Sheets',
+      child: Icon(
+        Icons.cloud_upload_outlined,
+        size: 18,
+        color: Color(0xFFD97706),
+      ),
+    );
+  }
+}
+
+/// Dialog phóng to mã QR cho máy chiếu lớp học (Dark cinema style)
+class _FullscreenQrDialog extends StatelessWidget {
+  const _FullscreenQrDialog({
+    required this.session,
+    required this.qrNotifier,
+    required this.countdownNotifier,
+  });
+
+  final AttendanceSession session;
+  final ValueNotifier<IssuedQr?> qrNotifier;
+  final ValueNotifier<int> countdownNotifier;
+
+  @override
+  Widget build(BuildContext context) {
+    // Lắng nghe phím ESC để đóng dialog tiện lợi trên máy tính
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).pop(),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Dialog(
+          insetPadding: EdgeInsets.zero,
+          backgroundColor: Colors.transparent,
+          child: Container(
+            width: double.infinity,
+            height: double.infinity,
+            color: const Color(0xFF0F172A).withValues(alpha: 0.96),
+            child: SafeArea(
+              child: Column(
+                children: [
+                  // Top bar
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 32,
+                      vertical: 20,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${session.subject} · ${session.classCode}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · Slot ${session.daySlot ?? '—'} · ${session.date}',
+                              style: const TextStyle(
+                                color: Color(0xFF94A3B8),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Text(
+                                    'ESC để thoát',
+                                    style: TextStyle(
+                                      color: Color(0xFF94A3B8),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            IconButton(
+                              style: IconButton.styleFrom(
+                                backgroundColor:
+                                    Colors.white.withValues(alpha: 0.15),
+                              ),
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                color: Colors.white,
+                                size: 26,
+                              ),
+                              onPressed: () => Navigator.of(context).pop(),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Khu vực QR trung tâm
+                  Expanded(
+                    child: Center(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final qrSize = min(
+                            constraints.maxWidth * 0.7,
+                            constraints.maxHeight * 0.7,
+                          );
+
+                          return ValueListenableBuilder<IssuedQr?>(
+                            valueListenable: qrNotifier,
+                            builder: (context, qr, _) {
+                              if (qr == null) {
+                                return const CircularProgressIndicator(
+                                  color: Colors.white,
+                                );
+                              }
+
+                              return Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(24),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(28),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black
+                                              .withValues(alpha: 0.5),
+                                          blurRadius: 40,
+                                          spreadRadius: 8,
+                                        ),
+                                      ],
+                                    ),
+                                    child: QrImageView(
+                                      data: qr.url,
+                                      version: QrVersions.auto,
+                                      size: qrSize,
+                                      gapless: false,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 24),
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: countdownNotifier,
+                                    builder: (context, seconds, _) {
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(30),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.sync_rounded,
+                                              size: 16,
+                                              color: Color(0xFF2DD4BF),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Mã tự động đổi sau: ${seconds.toString().padLeft(2, '0')} giây',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  // Hướng dẫn sinh viên ở chân trang
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 28),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'Sinh viên mở web điểm danh và quét mã QR trên màn hình máy chiếu',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Không chia sẻ liên kết ra ngoài lớp học',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.6),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -512,11 +1703,141 @@ class _SessionScreenState extends State<SessionScreen> {
   }
 }
 
-String _attendanceStatusLabel(String status) => switch (status) {
-  'absent' => 'Vắng',
-  'excused' => 'Có phép',
-  _ => 'Có mặt',
-};
+/// Thẻ số liệu thống kê ở header
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.label,
+    required this.count,
+    required this.icon,
+    required this.color,
+    required this.bgColor,
+  });
+
+  final String label;
+  final String count;
+  final IconData icon;
+  final Color color;
+  final Color bgColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 22, color: color),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                count,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: color,
+                ),
+              ),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color.withValues(alpha: 0.8),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Filter chip
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.isSelected,
+    required this.onSelected,
+    this.color = const Color(0xFF0F766E),
+  });
+
+  final String label;
+  final bool isSelected;
+  final VoidCallback onSelected;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onSelected,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? color : Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? color : const Color(0xFFCBD5E1),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            color: isSelected ? Colors.white : const Color(0xFF475569),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoRowSimple extends StatelessWidget {
+  const _InfoRowSimple({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: const Color(0xFF0F766E)),
+        const SizedBox(width: 10),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+        ),
+        const Spacer(),
+        Flexible(
+          child: Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF0F172A),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class _StudentInfoRow extends StatelessWidget {
   const _StudentInfoRow({
@@ -531,64 +1852,33 @@ class _StudentInfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 7),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 21, color: const Color(0xFF17658C)),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 105,
-          child: Text(label, style: const TextStyle(color: Color(0xFF64777D))),
-        ),
-        Expanded(
-          child: SelectableText(
-            value.isEmpty ? '—' : value,
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-class _InfoCard extends StatelessWidget {
-  const _InfoCard({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, size: 30, color: const Color(0xFF1D687C)),
-            const SizedBox(width: 16),
+            Icon(icon, size: 20, color: const Color(0xFF0F766E)),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 100,
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 13,
+                ),
+              ),
+            ),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: const TextStyle(color: Color(0xFF64777D))),
-                  const SizedBox(height: 3),
-                  Text(
-                    value,
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ],
+              child: SelectableText(
+                value.isEmpty ? '—' : value,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                  color: Color(0xFF0F172A),
+                ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
+      );
 }
