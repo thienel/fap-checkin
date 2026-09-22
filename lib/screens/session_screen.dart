@@ -484,7 +484,9 @@ class _SessionScreenState extends State<SessionScreen> {
                         // Cột trái: Control & QR Panel (chiếm ~30%)
                         SizedBox(
                           width: 340,
-                          child: _buildControlSidePanel(context),
+                          child: SingleChildScrollView(
+                            child: _buildControlSidePanel(context),
+                          ),
                         ),
                         const SizedBox(width: 24),
                         // Cột phải: Command Center (chiếm ~70% trung tâm)
@@ -533,7 +535,7 @@ class _SessionScreenState extends State<SessionScreen> {
           ),
           color: Colors.white,
           child: Padding(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(16),
             child: Column(
               children: [
                 // Header card
@@ -579,11 +581,11 @@ class _SessionScreenState extends State<SessionScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 // QR Container
                 if (_qr == null)
                   const SizedBox.square(
-                    dimension: 230,
+                    dimension: 210,
                     child: Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -597,7 +599,7 @@ class _SessionScreenState extends State<SessionScreen> {
                   )
                 else
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
@@ -613,11 +615,11 @@ class _SessionScreenState extends State<SessionScreen> {
                     child: QrImageView(
                       data: _qr!.url,
                       version: QrVersions.auto,
-                      size: 220,
+                      size: 200,
                       gapless: false,
                     ),
                   ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 // Nút Phóng to QR
                 SizedBox(
                   width: double.infinity,
@@ -625,7 +627,7 @@ class _SessionScreenState extends State<SessionScreen> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFF0F766E),
                       side: const BorderSide(color: Color(0xFF0F766E)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
@@ -638,7 +640,7 @@ class _SessionScreenState extends State<SessionScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 Text(
                   'Tự đổi mã mỗi ${session.rotationSeconds}s · Hiệu lực ${session.validitySeconds}s',
                   textAlign: TextAlign.center,
@@ -648,7 +650,7 @@ class _SessionScreenState extends State<SessionScreen> {
                   ),
                 ),
                 if (_error != null) ...[
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
@@ -669,7 +671,7 @@ class _SessionScreenState extends State<SessionScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         // Card thông tin nhanh
         Card(
           elevation: 0,
@@ -679,7 +681,7 @@ class _SessionScreenState extends State<SessionScreen> {
           ),
           color: Colors.white,
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Column(
               children: [
                 _InfoRowSimple(
@@ -689,7 +691,7 @@ class _SessionScreenState extends State<SessionScreen> {
                   badgeColor: const Color(0xFFF1F5F9),
                   textColor: const Color(0xFF334155),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 _InfoRowSimple(
                   icon: Icons.access_time_outlined,
                   label: 'Ca học',
@@ -697,7 +699,7 @@ class _SessionScreenState extends State<SessionScreen> {
                   badgeColor: const Color(0xFFE0F2FE),
                   textColor: const Color(0xFF0369A1),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 _InfoRowSimple(
                   icon: Icons.layers_outlined,
                   label: 'Tiến độ môn',
