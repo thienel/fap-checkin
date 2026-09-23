@@ -19,6 +19,11 @@ class FakeAttendanceApi implements AttendanceApi {
   }
 
   @override
+  Future<String> rotateCheckoutKey(String sessionId, String previousKey) async {
+    return 'KEY123';
+  }
+
+  @override
   Future<void> stopAttendance(String sessionId) async {}
 
   @override
