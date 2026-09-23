@@ -29,6 +29,11 @@ class AttendanceApi {
   final Random _secureRandom = Random.secure();
   final Map<String, Future<String?>> _syncingRecords = {};
 
+  String _generateCheckoutKey() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    return List.generate(6, (index) => chars[_secureRandom.nextInt(chars.length)]).join();
+  }
+
   bool get isSheetSyncConfigured => _sheets.isConfigured;
 
   Future<List<CourseClassSummary>> getCourseClasses() => _guard(() async {
@@ -669,32 +674,29 @@ class AttendanceApi {
         .doc(uid);
     final sessionReference = _firestore.collection('attendanceSessions').doc();
 
-    final sessionData = await _firestore.runTransaction((transaction) async {
+    final result = await _firestore.runTransaction((transaction) async {
       final course = await transaction.get(courseReference);
       final active = await transaction.get(activeReference);
       final courseData = course.data();
       if (!course.exists ||
           courseData == null ||
           courseData['ownerUid'] != uid) {
-        throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+        return {'error': 'Không tìm thấy môn–lớp.'};
       }
       if (active.exists) {
-        throw const AttendanceApiException(
-          'Bạn đang có một phiên điểm danh khác. Hãy ngừng phiên đó trước.',
-        );
+        return {'error': 'Bạn đang có một phiên điểm danh khác. Hãy ngừng phiên đó trước.'};
       }
 
       final scheduled = _scheduledSlot(courseData['schedule'], slot.slot);
       if (scheduled == null) {
-        throw const AttendanceApiException('Slot không tồn tại.');
+        return {'error': 'Slot không tồn tại.'};
       }
       final today = _isoDate(DateTime.now());
       if (scheduled['date'] != today || slot.date != today) {
-        throw const AttendanceApiException(
-          'Chỉ có thể mở slot được xếp lịch hôm nay.',
-        );
+        return {'error': 'Chỉ có thể mở slot được xếp lịch hôm nay.'};
       }
 
+      final currentCheckoutKey = _generateCheckoutKey();
       final data = <String, dynamic>{
         'ownerUid': uid,
         'courseClassId': slot.courseClassId,
@@ -707,6 +709,9 @@ class AttendanceApi {
         'validitySeconds': validitySeconds,
         'status': 'active',
         'startedAt': FieldValue.serverTimestamp(),
+        'checkoutKey': currentCheckoutKey,
+        'previousCheckoutKey': currentCheckoutKey,
+        'checkoutKeyUpdatedAt': FieldValue.serverTimestamp(),
       };
       transaction.set(sessionReference, data);
       transaction.set(activeReference, {
@@ -716,6 +721,11 @@ class AttendanceApi {
       });
       return data;
     });
+
+    if (result.containsKey('error')) {
+      throw AttendanceApiException(result['error'] as String);
+    }
+    final sessionData = result;
 
     await _materializeAlwaysExcused(
       sessionId: sessionReference.id,
@@ -987,6 +997,29 @@ class AttendanceApi {
         Duration(seconds: validitySeconds.toInt()),
       ),
     );
+  });
+
+  Future<String> rotateCheckoutKey(String sessionId, String previousKey) => _guard(() async {
+    final uid = _teacherUid();
+    final sessionReference = _firestore.collection('attendanceSessions').doc(sessionId);
+    final newKey = _generateCheckoutKey();
+
+    await _firestore.runTransaction((transaction) async {
+      final session = await transaction.get(sessionReference);
+      final data = session.data();
+      if (!session.exists || data == null || data['ownerUid'] != uid) {
+        throw const AttendanceApiException('Không tìm thấy phiên điểm danh.');
+      }
+      if (data['status'] != 'active') {
+        throw const AttendanceApiException('Phiên điểm danh đã kết thúc.');
+      }
+      transaction.update(sessionReference, {
+        'checkoutKey': newKey,
+        'previousCheckoutKey': previousKey,
+        'checkoutKeyUpdatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+    return newKey;
   });
 
   Future<void> stopAttendance(String sessionId) => _guard(() async {

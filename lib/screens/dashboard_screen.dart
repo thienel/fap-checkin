@@ -106,15 +106,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       builder: (_) => const _SessionConfigDialog(),
     );
-    if (config == null || !mounted) return;
+    if (config == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('DEBUG: config is null')));
+      return;
+    }
+    if (!mounted) return;
 
     try {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('DEBUG: Calling startAttendance...')));
       final session = await widget.api.startAttendance(
         slot: slot,
         rotationSeconds: config.rotation,
         validitySeconds: config.validity,
       );
       if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('DEBUG: Navigator.push...')));
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => SessionScreen(api: widget.api, session: session),
@@ -123,8 +129,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) _refresh();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Không thể bắt đầu điểm danh: $error')),
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Lỗi khi bắt đầu'),
+          content: Text(error.toString()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
       );
     }
   }

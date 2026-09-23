@@ -48,6 +48,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 'Keychain Sharing và cấu hình ký ứng dụng.',
           'internal-error' =>
             'Lỗi nội bộ Firebase (Internal error). Vui lòng kiểm tra Email/Password Sign-in method đã bật trong Firebase Console chưa.',
+          'unknown-error' =>
+            'Lỗi không xác định (Thường do nhập SAI mật khẩu, hoặc mất kết nối mạng trên Windows).',
           'channel-error' => 'Vui lòng nhập đầy đủ email và mật khẩu.',
           _ => '[${error.code}] ${error.message ?? 'Không thể đăng nhập.'}',
         },
