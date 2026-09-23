@@ -32,6 +32,9 @@ class RosterRow {
 
   bool get isValid => errors.isEmpty;
   String get emailNormalized => normalizeEmail(email);
+
+  /// MSSV chuan hoa: trim + toUpperCase. Dung de ghi vao Firestore.
+  String get studentCodeNormalized => normalizeStudentCode(studentCode);
 }
 
 RosterFile parseRosterFile(String fileName, Uint8List bytes) {
@@ -48,20 +51,20 @@ RosterFile parseRosterFile(String fileName, Uint8List bytes) {
   } else if (lowerName.endsWith('.xlsx')) {
     final workbook = Excel.decodeBytes(bytes);
     if (workbook.tables.isEmpty) {
-      throw const FormatException('File Excel không có worksheet.');
+      throw const FormatException('File Excel khong co worksheet.');
     }
     final sheet = workbook.tables.values.first;
     rawRows = sheet.rows
         .map((row) => row.map((cell) => cell?.value?.toString() ?? '').toList())
         .toList();
   } else {
-    throw const FormatException('Chỉ hỗ trợ file CSV hoặc XLSX.');
+    throw const FormatException('Chi ho tro file CSV hoac XLSX.');
   }
 
   final nonEmpty = rawRows
       .where((row) => row.any((cell) => cell.toString().trim().isNotEmpty))
       .toList();
-  if (nonEmpty.isEmpty) throw const FormatException('File không có dữ liệu.');
+  if (nonEmpty.isEmpty) throw const FormatException('File khong co du lieu.');
   final headers = nonEmpty.first
       .map((value) => value.toString().trim())
       .toList();
@@ -104,8 +107,6 @@ Map<RosterField, int?> suggestRosterMapping(List<String> headers) {
     }),
     RosterField.fullName: find({
       'hoten',
-      'họten',
-      'hotên',
       'hovaten',
       'fullname',
       'name',
@@ -113,34 +114,83 @@ Map<RosterField, int?> suggestRosterMapping(List<String> headers) {
   };
 }
 
+/// Chuan hoa MSSV: trim + toUpperCase.
+String normalizeStudentCode(String value) => value.trim().toUpperCase();
+
+/// Pattern MSSV hop le: 3-20 ky tu A-Z, 0-9, gach duoi hoac gach ngang.
+final _studentCodePattern = RegExp(r'^[A-Z0-9_-]{3,20}$');
+
 List<RosterRow> validateRosterRows(
   RosterFile file,
   Map<RosterField, int?> mapping,
 ) {
-  final seen = <String>{};
-  String value(List<String> row, RosterField field) {
+  String fieldValue(List<String> row, RosterField field) {
     final index = mapping[field];
     return index == null || index < 0 || index >= row.length
         ? ''
         : row[index].trim();
   }
 
+  // Pass 1: Collect de detect duplicates tren toan bo file.
+  // Tat ca dong trung - ke ca dong dau tien - deu bi bao loi.
+  final emailIndices = <String, List<int>>{};
+  final codeIndices = <String, List<int>>{};
+
+  for (var i = 0; i < file.rows.length; i++) {
+    final row = file.rows[i];
+    final email = fieldValue(row, RosterField.email);
+    final code = fieldValue(row, RosterField.studentCode);
+    final normalizedEmail = normalizeEmail(email);
+    final normalizedCode = normalizeStudentCode(code);
+
+    if (RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalizedEmail)) {
+      emailIndices.putIfAbsent(normalizedEmail, () => []).add(i);
+    }
+    if (code.isNotEmpty && _studentCodePattern.hasMatch(normalizedCode)) {
+      codeIndices.putIfAbsent(normalizedCode, () => []).add(i);
+    }
+  }
+
+  final duplicateEmailIdx = <int>{
+    for (final list in emailIndices.values)
+      if (list.length > 1) ...list,
+  };
+  final duplicateCodeIdx = <int>{
+    for (final list in codeIndices.values)
+      if (list.length > 1) ...list,
+  };
+
+  // Pass 2: Build RosterRow voi day du loi tung dong.
   return [
     for (var index = 0; index < file.rows.length; index++)
       () {
         final row = file.rows[index];
-        final email = value(row, RosterField.email);
-        final code = value(row, RosterField.studentCode);
-        final name = value(row, RosterField.fullName);
+        final email = fieldValue(row, RosterField.email);
+        final code = fieldValue(row, RosterField.studentCode);
+        final name = fieldValue(row, RosterField.fullName);
         final normalizedEmail = normalizeEmail(email);
+        final normalizedCode = normalizeStudentCode(code);
         final errors = <String>[];
+
+        // Validate email.
         if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalizedEmail)) {
-          errors.add('Email không hợp lệ');
-        } else if (!seen.add(normalizedEmail)) {
-          errors.add('Email trùng trong file');
+          errors.add('Email kh\u00f4ng h\u1ee3p l\u1ec7');
+        } else if (duplicateEmailIdx.contains(index)) {
+          errors.add('Email tr\u00f9ng trong file');
         }
-        if (code.isEmpty) errors.add('Thiếu mã sinh viên');
-        if (name.isEmpty) errors.add('Thiếu họ tên');
+
+        // Validate MSSV.
+        if (code.isEmpty) {
+          errors.add('Thi\u1ebfu m\u00e3 sinh vi\u00ean');
+        } else if (!_studentCodePattern.hasMatch(normalizedCode)) {
+          errors.add('MSSV kh\u00f4ng h\u1ee3p l\u1ec7 (ch\u1ec9 g\u1ed3m 3\u201320 k\u00fd t\u1ef1 A\u2013Z, 0\u20139, _ ho\u1eb7c -)');
+        } else if (duplicateCodeIdx.contains(index)) {
+          errors.add('MSSV tr\u00f9ng trong file');
+        }
+
+        // Validate ho ten.
+        if (name.isEmpty) errors.add('Thi\u1ebfu h\u1ecd t\u00ean');
+
         return RosterRow(
           rowNumber: index + 2,
           email: email,
@@ -152,4 +202,5 @@ List<RosterRow> validateRosterRows(
   ];
 }
 
+/// Chuan hoa email: trim + toLowerCase.
 String normalizeEmail(String value) => value.trim().toLowerCase();

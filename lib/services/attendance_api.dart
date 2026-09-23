@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../domain/models.dart';
 import '../domain/class_overview.dart';
@@ -214,6 +215,9 @@ class AttendanceApi {
     required String fileName,
     required List<RosterRow> rows,
     required RosterImportMode mode,
+    // Khi true: commit các dòng hợp lệ dù còn dòng lỗi (UI phải hiển thị cảnh báo).
+    // Khi false (mặc định): từ chối toàn bộ nếu còn bất kỳ dòng lỗi nào.
+    bool skipInvalidRows = false,
     void Function(int completed, int total)? onProgress,
   }) => _guard(() async {
     final uid = _teacherUid();
@@ -225,15 +229,51 @@ class AttendanceApi {
       throw const AttendanceApiException('Không tìm thấy môn–lớp.');
     }
 
+    // Task 1.1: Từ chối toàn bộ nếu còn dòng lỗi (trừ khi UI chọn skipInvalidRows).
+    final invalidRows = rows.where((row) => !row.isValid).toList();
+    if (invalidRows.isNotEmpty && !skipInvalidRows) {
+      final count = invalidRows.length;
+      final firstError = invalidRows.first.errors.first;
+      throw AttendanceApiException(
+        'File có $count dòng lỗi. Dòng ${invalidRows.first.rowNumber}: $firstError. '
+        'Sửa file hoặc chọn "Bỏ qua dòng lỗi" để tiếp tục.',
+      );
+    }
+
     final validRows = rows.where((row) => row.isValid).toList();
     final students = courseReference.collection('students');
+    final claims = courseReference.collection('studentCodeClaims');
     final existingSnapshot = await students.get();
     final existing = {
       for (final doc in existingSnapshot.docs) doc.id: doc.data(),
     };
+
+    // Task 1.1: Preflight – MSSV đã thuộc email khác trong roster hiện tại → reject.
+    // Build map: studentCodeNormalized -> studentId hiện tại trong Firestore.
+    final existingCodeToStudentId = <String, String>{
+      for (final doc in existingSnapshot.docs)
+        if (doc.data()['studentCodeNormalized'] is String)
+          doc.data()['studentCodeNormalized'] as String: doc.id,
+    };
+    for (final row in validRows) {
+      final code = row.studentCodeNormalized;
+      final newStudentId = sha256
+          .convert(utf8.encode(row.emailNormalized))
+          .toString();
+      final existingStudentId = existingCodeToStudentId[code];
+      if (existingStudentId != null && existingStudentId != newStudentId) {
+        // Cùng MSSV nhưng email khác → từ chối toàn bộ import.
+        throw AttendanceApiException(
+          'MSSV ${row.studentCode} (dòng ${row.rowNumber}) đã thuộc một sinh viên khác trong lớp. '
+          'Không thể import. Hãy kiểm tra lại file.',
+        );
+      }
+    }
+
     var completed = 0;
+    // Mỗi sinh viên hợp lệ tạo 2 writes: student + claim.
     final totalWrites =
-        validRows.length +
+        validRows.length * 2 +
         (mode == RosterImportMode.replaceInactive ? existing.length : 0);
 
     Future<void> commitChunks(
@@ -251,6 +291,7 @@ class AttendanceApi {
       }
     }
 
+    // Task 1.1: Chỉ deactivate sau khi validate toàn bộ data mới hợp lệ.
     if (mode == RosterImportMode.replaceInactive && existing.isNotEmpty) {
       await commitChunks([
         for (final document in existingSnapshot.docs)
@@ -262,24 +303,36 @@ class AttendanceApi {
       ]);
     }
 
+    // Ghi student document + studentCodeClaim atomically trong cùng batch.
     await commitChunks([
       for (final row in validRows)
-        (batch) {
+        ...((){
           final studentId = sha256
               .convert(utf8.encode(row.emailNormalized))
               .toString();
           final previous = existing[studentId];
-          batch.set(students.doc(studentId), {
-            'emailNormalized': row.emailNormalized,
-            'email': row.email.trim(),
-            'studentCode': row.studentCode.trim(),
-            'fullName': row.fullName.trim(),
-            'attendancePolicy': previous?['attendancePolicy'] ?? 'normal',
-            'active': true,
-            'importedAt': FieldValue.serverTimestamp(),
-            'importedBy': uid,
-          }, SetOptions(merge: true));
-        },
+          final code = row.studentCodeNormalized;
+          return [
+            // Write 1: student document với studentCodeNormalized.
+            (WriteBatch batch) => batch.set(students.doc(studentId), {
+              'emailNormalized': row.emailNormalized,
+              'email': row.email.trim(),
+              'studentCode': row.studentCode.trim(),
+              'studentCodeNormalized': code,
+              'fullName': row.fullName.trim(),
+              'attendancePolicy': previous?['attendancePolicy'] ?? 'normal',
+              'active': true,
+              'importedAt': FieldValue.serverTimestamp(),
+              'importedBy': uid,
+            }, SetOptions(merge: true)),
+            // Write 2: studentCodeClaim để enforce uniqueness khi concurrent.
+            (WriteBatch batch) => batch.set(claims.doc(code), {
+              'studentId': studentId,
+              'ownerUid': uid,
+              'createdAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true)),
+          ];
+        })(),
     ]);
 
     await courseReference.collection('imports').add({
@@ -313,10 +366,57 @@ class AttendanceApi {
     final id = '${normalizedSubject}_$normalizedClass';
     final reference = _firestore.collection('courseClasses').doc(id);
 
+    // Task 1.2: Sinh toàn bộ lock ID cho mỗi slot trong lịch.
+    // Lock ID: {ownerUid}_{date}_{daySlot} để prevent concurrent creation
+    // của hai lớp chiếm cùng khung giờ của cùng giảng viên.
+    final lockIds = [
+      for (final item in schedule)
+        '${uid}_${_isoDate(item.date)}_$daySlot',
+    ];
+    final lockRefs = [
+      for (final lockId in lockIds)
+        _firestore.collection('teacherScheduleLocks').doc(lockId),
+    ];
+
+    // Firestore transaction limit: 500 reads + writes.
+    // Với preset lớn nhất (20 slots): 20 lock reads + 1 course read + 20 lock writes + 1 course write = 42 ops.
+    // Luôn trong giới hạn, nhưng validate phòng ngừa.
+    if (lockRefs.length > 400) {
+      throw const AttendanceApiException(
+        'Lịch có quá nhiều slot. Hãy chọn preset ít slot hơn.',
+      );
+    }
+
     await _firestore.runTransaction((transaction) async {
-      if ((await transaction.get(reference)).exists) {
+      // Đọc course document.
+      final courseDoc = await transaction.get(reference);
+      if (courseDoc.exists) {
         throw const AttendanceApiException('Môn–lớp này đã tồn tại.');
       }
+
+      // Đọc tất cả lock trong cùng transaction.
+      final lockDocs = await Future.wait(
+        lockRefs.map((ref) => transaction.get(ref)),
+      );
+
+      // Kiểm tra xung đột: lock tồn tại cho lớp khác.
+      for (var i = 0; i < lockDocs.length; i++) {
+        final lockDoc = lockDocs[i];
+        if (lockDoc.exists) {
+          final lockData = lockDoc.data()!;
+          final existingCourseId = lockData['courseClassId'] as String?;
+          if (existingCourseId != null && existingCourseId != id) {
+            final date = lockData['date'] as String? ?? '?';
+            final slot = lockData['daySlot'] as int? ?? 0;
+            throw AttendanceApiException(
+              'Khung giờ Slot $slot ngày $date đã bị chiếm bởi lớp $existingCourseId. '
+              'Hãy chọn slot hoặc ngày bắt đầu khác.',
+            );
+          }
+        }
+      }
+
+      // Tạo course document.
       transaction.set(reference, {
         'subject': normalizedSubject,
         'classCode': normalizedClass,
@@ -335,10 +435,33 @@ class AttendanceApi {
         'ownerUid': uid,
         'createdAt': FieldValue.serverTimestamp(),
       });
+
+      // Tạo tất cả locks atomically với course.
+      for (var i = 0; i < lockRefs.length; i++) {
+        final item = schedule[i];
+        transaction.set(lockRefs[i], {
+          'ownerUid': uid,
+          'date': _isoDate(item.date),
+          'daySlot': daySlot,
+          'courseClassId': id,
+          'subject': normalizedSubject,
+          'classCode': normalizedClass,
+          'slotNumber': item.number,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
     });
   });
 
+  /// Chỉ dùng cho debug/test thủ công. Không được gọi tự động trong production.
   Future<void> createTestCourseClassNow() => _guard(() async {
+    // Task 1.4: Guard bằng kDebugMode để không tự ghi data trong production.
+    if (!kDebugMode) {
+      throw const AttendanceApiException(
+        'Chức năng tạo lớp demo chỉ khả dụng trong chế độ debug.',
+      );
+    }
+    // Phần còn lại của method không thay đổi:
     final uid = _teacherUid();
     final user = _auth.currentUser!;
     final now = DateTime.now();
@@ -773,22 +896,41 @@ class AttendanceApi {
     }
   });
 
-  Future<void> adjustAttendanceBulk({
+  /// Task 1.4: Điều chỉnh điểm danh hàng loạt với chunked execution.
+  /// Trả về danh sách studentId thất bại với lý do, thay vì throw ngay lần đầu.
+  Future<Map<String, String>> adjustAttendanceBulk({
     required String courseClassId,
     required int slot,
     required Iterable<String> studentIds,
     required AttendanceStatus status,
     required String reason,
   }) async {
-    for (final studentId in studentIds) {
-      await adjustAttendance(
-        courseClassId: courseClassId,
-        slot: slot,
-        studentId: studentId,
-        status: status,
-        reason: reason,
+    final failures = <String, String>{};
+    final ids = studentIds.toList();
+
+    // Xử lý theo chunks 400 để tránh timeout và cung cấp tiến độ rõ ràng.
+    for (var start = 0; start < ids.length; start += 400) {
+      final end = min(start + 400, ids.length);
+      final chunk = ids.sublist(start, end);
+      await Future.wait(
+        chunk.map((studentId) async {
+          try {
+            await adjustAttendance(
+              courseClassId: courseClassId,
+              slot: slot,
+              studentId: studentId,
+              status: status,
+              reason: reason,
+            );
+          } on AttendanceApiException catch (error) {
+            failures[studentId] = error.message;
+          } on Exception catch (error) {
+            failures[studentId] = error.toString();
+          }
+        }),
       );
     }
+    return failures;
   }
 
   Future<IssuedQr> issueQr(String sessionId) => _guard(() async {
@@ -799,6 +941,9 @@ class AttendanceApi {
     final token = _newToken();
     final tokenReference = _firestore.collection('qrTokens').doc(token);
 
+    // Task 1.3: Update currentQrGeneration atomically khi sinh token mới.
+    // Generation là timestamp server dưới dạng int. Rules sẽ reject token
+    // của generation cũ hơn currentQrGeneration.
     await _firestore.runTransaction((transaction) async {
       final session = await transaction.get(sessionReference);
       final data = session.data();
@@ -808,11 +953,18 @@ class AttendanceApi {
       if (data['status'] != 'active') {
         throw const AttendanceApiException('Phiên điểm danh đã kết thúc.');
       }
+      // Mỗi lần issue QR mới, increment generation để invalidate token cũ.
+      final currentGen = (data['currentQrGeneration'] as num?)?.toInt() ?? 0;
+      final newGen = currentGen + 1;
+      transaction.update(sessionReference, {
+        'currentQrGeneration': newGen,
+      });
       transaction.set(tokenReference, {
         'ownerUid': uid,
         'sessionId': sessionId,
         'issuedAt': FieldValue.serverTimestamp(),
         'validitySeconds': data['validitySeconds'],
+        'qrGeneration': newGen,
       });
     });
 
