@@ -1,7 +1,5 @@
 # FAP Check Attendance — Firebase Spark
 
-> 📖 **Hướng dẫn thiết lập môi trường khi `git pull` code**: Xem file [SETUP-GUIDE.md](file:///e:/PRM393_Project/fap-checkin/SETUP-GUIDE.md).
-
 Ứng dụng chạy hoàn toàn không cần Cloud Functions và dùng được với Firebase Spark:
 
 - Flutter Desktop điều khiển môn–lớp, phiên điểm danh và QR xoay vòng.

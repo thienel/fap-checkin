@@ -3,222 +3,39 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#2563eb" />
-    <meta name="description" content="Xác nhận điểm danh trực tuyến dành cho sinh viên FPT." />
-    <title>Điểm danh FAP - FPT University</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <meta name="theme-color" content="#164e63" />
+    <title>FAP Check Attendance</title>
   </head>
   <body>
     <main class="page-shell">
-      <div class="mobile-frame">
-        <!-- ── Loading state ── -->
-        <div id="step-loading" class="step-container">
-          <div class="spinner-large"></div>
-          <p class="loading-text">Đang tải thông tin điểm danh...</p>
+      <section class="card">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="img">
+            <path d="M3 3h7v7H3V3Zm2 2v3h3V5H5Zm9-2h7v7h-7V3Zm2 2v3h3V5h-3ZM3 14h7v7H3v-7Zm2 2v3h3v-3H5Zm9-2h3v3h-3v-3Zm4 0h3v7h-3v-3h-2v3h-2v-3h3v-2h1v-2Z" />
+          </svg>
         </div>
+        <p class="eyebrow">FAP CHECK ATTENDANCE</p>
+        <h1 id="title">Xác nhận điểm danh</h1>
+        <p id="message" class="message">
+          Đăng nhập bằng tài khoản Google trước khi mã QR hết hạn.
+        </p>
 
-        <!-- ── Form thông tin sinh viên (Vào thẳng đây) ── -->
-        <div id="step-student-form" class="step-container hidden">
-          <div class="app-header">
-            <h2 class="header-title">Thông tin sinh viên</h2>
-          </div>
+        <div id="status" class="status hidden" role="status" aria-live="polite"></div>
 
-          <div class="banner-notice-pill" id="session-info-pill">
-            <span class="pill-icon">📚</span>
-            <span id="session-info-text">Điểm danh môn học</span>
-          </div>
+        <button id="sign-in" class="primary-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.4-.18-2.06H12v3.9h5.38a4.6 4.6 0 0 1-2 3.02v2.53h3.24c1.9-1.75 2.98-4.33 2.98-7.39Z"/>
+            <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.38l-3.24-2.53c-.9.6-2.05.96-3.38.96-2.61 0-4.82-1.77-5.61-4.14H3.04v2.61A10 10 0 0 0 12 22Z"/>
+            <path fill="#FBBC05" d="M6.39 13.91A6.02 6.02 0 0 1 6.07 12c0-.66.11-1.3.32-1.91V7.48H3.04A10 10 0 0 0 2 12c0 1.61.38 3.14 1.04 4.52l3.35-2.61Z"/>
+            <path fill="#EA4335" d="M12 5.95c1.47 0 2.79.51 3.83 1.5l2.87-2.88A9.63 9.63 0 0 0 12 2a10 10 0 0 0-8.96 5.48l3.35 2.61C7.18 7.72 9.39 5.95 12 5.95Z"/>
+          </svg>
+          Tiếp tục với Google
+        </button>
 
-          <form id="checkin-form" novalidate>
-            <!-- MSSV -->
-            <div class="form-group">
-              <label class="form-label" for="student-code">Mã sinh viên <span class="required">*</span></label>
-              <div class="input-wrapper">
-                <span class="input-icon">👤</span>
-                <input
-                  type="text"
-                  id="student-code"
-                  name="student-code"
-                  class="form-input"
-                  placeholder="Nhập mã sinh viên (VD: SE123456)"
-                  autocomplete="off"
-                  required
-                />
-              </div>
-              <span class="field-error hidden" id="student-code-error">Vui lòng nhập mã sinh viên.</span>
-            </div>
-
-            <!-- Full Name -->
-            <div class="form-group">
-              <label class="form-label" for="full-name">Họ và tên <span class="required">*</span></label>
-              <div class="input-wrapper">
-                <span class="input-icon">👤</span>
-                <input
-                  type="text"
-                  id="full-name"
-                  name="full-name"
-                  class="form-input"
-                  placeholder="Nhập họ và tên"
-                  autocomplete="name"
-                  required
-                />
-              </div>
-              <span class="field-error hidden" id="full-name-error">Vui lòng nhập họ và tên.</span>
-            </div>
-
-            <!-- Student Email -->
-            <div class="form-group">
-              <label class="form-label" for="student-email">Email FPT <span class="required">*</span></label>
-              <div class="input-wrapper">
-                <span class="input-icon">✉️</span>
-                <input
-                  type="email"
-                  id="student-email"
-                  name="student-email"
-                  class="form-input"
-                  placeholder="sexxxxxx@fpt.edu.vn"
-                  autocomplete="email"
-                  required
-                />
-              </div>
-              <span class="field-error hidden" id="student-email-error">Vui lòng nhập email hợp lệ.</span>
-            </div>
-
-            <!-- Secret Key -->
-            <div class="form-group">
-              <label class="form-label" for="secret-key">Secret Key (Mã hiển thị trên máy giảng viên) <span class="required">*</span></label>
-              <div class="input-wrapper">
-                <span class="input-icon">🔑</span>
-                <input
-                  type="text"
-                  id="secret-key"
-                  name="secret-key"
-                  class="form-input form-input--key"
-                  placeholder="Nhập 6 ký tự secret key"
-                  autocomplete="off"
-                  maxlength="6"
-                  required
-                />
-              </div>
-              <span class="field-error hidden" id="secret-key-error">Vui lòng nhập 6 ký tự Secret Key.</span>
-            </div>
-
-            <!-- Ghi chú (tùy chọn) -->
-            <div class="form-group">
-              <label class="form-label" for="notes">Ghi chú (tùy chọn)</label>
-              <div class="input-wrapper">
-                <span class="input-icon">📝</span>
-                <input
-                  type="text"
-                  id="notes"
-                  name="notes"
-                  class="form-input"
-                  placeholder="Ví dụ: Đi muộn, lý do..."
-                  autocomplete="off"
-                />
-              </div>
-            </div>
-
-            <div id="form-error-banner" class="error-banner hidden"></div>
-
-            <button id="btn-submit-checkin" class="btn-primary" type="submit">
-              Xác nhận điểm danh
-            </button>
-          </form>
-        </div>
-
-        <!-- ── Màn hình 1: Điểm danh thành công! ── -->
-        <div id="step-done-success" class="step-container hidden">
-          <div class="success-icon-animation">
-            <div class="circle-badge green-circle">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-            </div>
-          </div>
-
-          <h2 class="result-title">Điểm danh thành công!</h2>
-          <p class="result-subtitle">Cảm ơn bạn đã tham gia lớp học</p>
-
-          <div class="summary-card">
-            <div class="summary-row">
-              <span class="sum-label">Mã sinh viên</span>
-              <span class="sum-val bold" id="res-student-code">SE123456</span>
-            </div>
-            <div class="summary-row">
-              <span class="sum-label">Họ và tên</span>
-              <span class="sum-val bold" id="res-student-name">Nguyễn Văn A</span>
-            </div>
-            <div class="summary-row">
-              <span class="sum-label">Lớp / Môn</span>
-              <span class="sum-val" id="res-class-subject">SE1801 · PRM393</span>
-            </div>
-            <div class="summary-row">
-              <span class="sum-label">Thời gian điểm danh</span>
-              <span class="sum-val" id="res-time">08:12 - 17/09/2026</span>
-            </div>
-            <div class="summary-row">
-              <span class="sum-label">Trạng thái</span>
-              <span class="status-tag green">Đạt</span>
-            </div>
-          </div>
-
-          <button id="btn-close-success" class="btn-primary" type="button">
-            Đóng
-          </button>
-        </div>
-
-        <!-- ── Màn hình 2: Bạn đã điểm danh rồi! ── -->
-        <div id="step-done-duplicate" class="step-container hidden">
-          <div class="success-icon-animation">
-            <div class="circle-badge blue-circle">
-              <span class="badge-emoji">👤✔️</span>
-            </div>
-          </div>
-
-          <h2 class="result-title">Bạn đã điểm danh rồi!</h2>
-          <p class="result-subtitle">Sinh viên này đã được ghi nhận trong buổi học hiện tại.</p>
-
-          <div class="summary-card" id="dup-summary-card">
-            <div class="summary-row">
-              <span class="sum-label">Mã sinh viên</span>
-              <span class="sum-val bold" id="dup-student-code">SE123456</span>
-            </div>
-            <div class="summary-row">
-              <span class="sum-label">Họ và tên</span>
-              <span class="sum-val bold" id="dup-student-name">Nguyễn Văn A</span>
-            </div>
-            <div class="summary-row">
-              <span class="sum-label">Lớp / Môn</span>
-              <span class="sum-val" id="dup-class-subject">SE1801 · PRM393</span>
-            </div>
-          </div>
-
-          <button id="btn-close-duplicate" class="btn-primary" type="button">
-            Đóng
-          </button>
-        </div>
-
-        <!-- ── Màn hình 3: QR đã hết hạn ── -->
-        <div id="step-done-expired" class="step-container hidden">
-          <div class="success-icon-animation">
-            <div class="circle-badge red-circle">
-              <span class="badge-emoji">⏰</span>
-            </div>
-          </div>
-
-          <h2 class="result-title">QR đã hết hạn</h2>
-          <p class="result-subtitle" id="expired-desc">
-            Mã QR này chỉ có hiệu lực trong thời gian ngắn. Vui lòng quét lại mã mới trên màn hình giảng viên.
-          </p>
-
-          <button id="btn-retry-qr" class="btn-primary" type="button">
-            Quay lại quét QR
-          </button>
-        </div>
-
-      </div>
+        <p class="privacy">
+          Hệ thống chỉ sử dụng email Google để ghi nhận điểm danh.
+        </p>
+      </section>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>
