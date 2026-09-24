@@ -78,7 +78,7 @@ cp firebase.desktop.example.json firebase.desktop.json
 
 ```json
 {
-  "PUBLIC_WEB_URL": "https://fap-checkin.web.app",
+  "PUBLIC_WEB_URL": "https://fap-checkin-c8c8d.web.app",
   "APPS_SCRIPT_URL": "https://script.google.com/macros/s/.../exec",
   "APPS_SCRIPT_SECRET": "giống-SYNC_SECRET-trong-Apps-Script"
 }
@@ -114,7 +114,7 @@ khi thay đổi Firebase production.
 URL check-in cố định:
 
 ```text
-https://fap-checkin.web.app/check-in?t=<QR_TOKEN>
+https://fap-checkin-c8c8d.web.app/check-in?t=<QR_TOKEN>
 ```
 
 ## 6. Chạy desktop
