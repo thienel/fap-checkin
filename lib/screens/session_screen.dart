@@ -40,15 +40,21 @@ class _SessionScreenState extends State<SessionScreen> {
 
   Timer? _rotationTimer;
   Timer? _countdownTimer;
+  Timer? _checkoutRetryTimer;
 
   IssuedQr? _qr;
   final ValueNotifier<IssuedQr?> _qrNotifier = ValueNotifier<IssuedQr?>(null);
   late final ValueNotifier<int> _secondsLeftNotifier;
+  late final ValueNotifier<int> _checkoutSecondsLeftNotifier;
+  late String _checkoutCode;
+  late DateTime? _checkoutCodeIssuedAt;
 
   bool _issuing = false;
+  bool _rotatingCheckoutCode = false;
   bool _stopping = false;
   bool _retryingSync = false;
   String? _error;
+  String? _checkoutError;
 
   String _searchQuery = '';
   AttendanceFilter _selectedFilter = AttendanceFilter.all;
@@ -65,6 +71,12 @@ class _SessionScreenState extends State<SessionScreen> {
 
     _secondsLeftNotifier =
         ValueNotifier<int>(widget.session.rotationSeconds);
+    _checkoutSecondsLeftNotifier =
+        ValueNotifier<int>(
+          _checkoutSecondsRemaining(widget.session.checkoutCodeIssuedAt),
+    );
+    _checkoutCode = widget.session.checkoutCode;
+    _checkoutCodeIssuedAt = widget.session.checkoutCodeIssuedAt;
 
     _issueQr();
 
@@ -79,6 +91,11 @@ class _SessionScreenState extends State<SessionScreen> {
       if (_secondsLeftNotifier.value > 0) {
         _secondsLeftNotifier.value -= 1;
       }
+      _checkoutSecondsLeftNotifier.value =
+          _checkoutSecondsRemaining(_checkoutCodeIssuedAt);
+      if (_checkoutSecondsLeftNotifier.value == 0 && _checkoutError == null) {
+        unawaited(_rotateCheckoutCode());
+      }
     });
   }
 
@@ -86,8 +103,10 @@ class _SessionScreenState extends State<SessionScreen> {
   void dispose() {
     _rotationTimer?.cancel();
     _countdownTimer?.cancel();
+    _checkoutRetryTimer?.cancel();
     _qrNotifier.dispose();
     _secondsLeftNotifier.dispose();
+    _checkoutSecondsLeftNotifier.dispose();
     super.dispose();
   }
 
@@ -111,6 +130,47 @@ class _SessionScreenState extends State<SessionScreen> {
     } finally {
       _issuing = false;
     }
+  }
+
+  Future<void> _rotateCheckoutCode() async {
+    if (_rotatingCheckoutCode || _stopping || _checkoutCode.isEmpty) return;
+    _rotatingCheckoutCode = true;
+    _checkoutRetryTimer?.cancel();
+    try {
+      final rotated = await widget.api.rotateCheckoutCode(widget.session.id);
+      if (mounted) {
+        setState(() {
+          _checkoutCode = rotated.code;
+          _checkoutCodeIssuedAt = rotated.issuedAt;
+          _checkoutSecondsLeftNotifier.value = _checkoutSecondsRemaining(
+            rotated.issuedAt,
+          );
+          _checkoutError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _checkoutError = 'Không thể đổi checkout code: $error');
+        _checkoutRetryTimer = Timer(const Duration(seconds: 5), () {
+          if (!mounted) return;
+          setState(() => _checkoutError = null);
+          unawaited(_rotateCheckoutCode());
+        });
+      }
+    } finally {
+      _rotatingCheckoutCode = false;
+    }
+  }
+
+  int _checkoutSecondsRemaining(DateTime? issuedAt) {
+    if (issuedAt == null) return widget.session.checkoutRotationSeconds;
+    final elapsed = DateTime.now().difference(issuedAt).inSeconds;
+    final remaining = widget.session.checkoutRotationSeconds - elapsed;
+    if (remaining <= 0) return 0;
+    if (remaining > widget.session.checkoutRotationSeconds) {
+      return widget.session.checkoutRotationSeconds;
+    }
+    return remaining;
   }
 
   String _formatDate(String isoDate) {
@@ -157,6 +217,7 @@ class _SessionScreenState extends State<SessionScreen> {
     setState(() => _stopping = true);
     _rotationTimer?.cancel();
     _countdownTimer?.cancel();
+    _checkoutRetryTimer?.cancel();
     try {
       await widget.api.stopAttendance(widget.session.id);
       if (mounted) Navigator.of(context).pop();
@@ -667,6 +728,91 @@ class _SessionScreenState extends State<SessionScreen> {
                     ),
                   ),
                 ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF99F6E4)),
+          ),
+          color: const Color(0xFFF0FDFA),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                const Icon(Icons.key_rounded, color: Color(0xFF0F766E)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Checkout code',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF0F766E),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      SelectableText(
+                        _checkoutCode.isEmpty ? '—' : _checkoutCode,
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 3,
+                          color: Color(0xFF134E4A),
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      ValueListenableBuilder<int>(
+                        valueListenable: _checkoutSecondsLeftNotifier,
+                        builder: (context, seconds, _) => Text(
+                          'Code mới sau ${seconds.toString().padLeft(2, '0')} giây',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF52656B),
+                          ),
+                        ),
+                      ),
+                      if (_checkoutError != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          _checkoutError!,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFFE11D48),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Sao chép checkout code',
+                  onPressed: _checkoutCode.isEmpty
+                      ? null
+                      : () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: _checkoutCode),
+                          );
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã sao chép checkout code.'),
+                            ),
+                          );
+                        },
+                  icon: const Icon(
+                    Icons.copy_rounded,
+                    color: Color(0xFF0F766E),
+                  ),
+                ),
               ],
             ),
           ),

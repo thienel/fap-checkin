@@ -102,7 +102,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _start(TodaySlot slot) async {
-    final config = await showDialog<({int rotation, int validity})>(
+    final config = await showDialog<
+      ({int rotation, int validity, int checkoutRotation})
+    >(
       context: context,
       builder: (_) => const _SessionConfigDialog(),
     );
@@ -113,6 +115,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         slot: slot,
         rotationSeconds: config.rotation,
         validitySeconds: config.validity,
+        checkoutRotationSeconds: config.checkoutRotation,
       );
       if (!mounted) return;
       await Navigator.of(context).push(
@@ -743,12 +746,14 @@ class _SessionConfigDialog extends StatefulWidget {
 class _SessionConfigDialogState extends State<_SessionConfigDialog> {
   final _formKey = GlobalKey<FormState>();
   final _rotation = TextEditingController(text: '5');
-  final _validity = TextEditingController(text: '20');
+  final _validity = TextEditingController(text: '60');
+  final _checkoutRotation = TextEditingController(text: '30');
 
   @override
   void dispose() {
     _rotation.dispose();
     _validity.dispose();
+    _checkoutRotation.dispose();
     super.dispose();
   }
 
@@ -782,9 +787,21 @@ class _SessionConfigDialogState extends State<_SessionConfigDialog> {
                 ),
                 validator: (value) => _validateSeconds(value, 2, 120),
               ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _checkoutRotation,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Đổi checkout code sau mỗi',
+                  suffixText: 'giây',
+                  helperText: 'Code 5 ký tự được tạo mới tự động theo chu kỳ này.',
+                  prefixIcon: Icon(Icons.key_rounded),
+                ),
+                validator: (value) => _validateSeconds(value, 10, 3600),
+              ),
               const SizedBox(height: 12),
               const Text(
-                'Toàn bộ đăng nhập Google phải hoàn tất trước khi QR hết hạn.',
+                'Sinh viên cần đăng nhập và nhập checkout code trước khi QR hết hạn.',
                 style: TextStyle(color: Color(0xFF52656B)),
               ),
             ],
@@ -811,7 +828,14 @@ class _SessionConfigDialogState extends State<_SessionConfigDialog> {
               );
               return;
             }
-            Navigator.pop(context, (rotation: rotation, validity: validity));
+            Navigator.pop(
+              context,
+              (
+                rotation: rotation,
+                validity: validity,
+                checkoutRotation: int.parse(_checkoutRotation.text),
+              ),
+            );
           },
           child: const Text('Bắt đầu'),
         ),
@@ -825,6 +849,7 @@ class _SessionConfigDialogState extends State<_SessionConfigDialog> {
         ? 'Nhập số từ $min đến $max'
         : null;
   }
+
 }
 
 class _SideItem extends StatelessWidget {

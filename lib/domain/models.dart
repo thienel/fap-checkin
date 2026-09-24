@@ -44,6 +44,9 @@ class AttendanceSession {
     required this.date,
     required this.rotationSeconds,
     required this.validitySeconds,
+    this.checkoutCode = '',
+    this.checkoutRotationSeconds = 30,
+    this.checkoutCodeIssuedAt,
   });
 
   factory AttendanceSession.fromMap(Map<String, dynamic> map) =>
@@ -58,6 +61,12 @@ class AttendanceSession {
         date: map['date'] as String,
         rotationSeconds: (map['rotationSeconds'] as num).toInt(),
         validitySeconds: (map['validitySeconds'] as num).toInt(),
+        checkoutCode: map['checkoutCode'] as String? ?? '',
+        checkoutRotationSeconds:
+            (map['checkoutRotationSeconds'] as num?)?.toInt() ?? 30,
+        checkoutCodeIssuedAt: DateTime.tryParse(
+          map['checkoutCodeIssuedAt'] as String? ?? '',
+        ),
       );
 
   final String id;
@@ -70,6 +79,19 @@ class AttendanceSession {
   final String date;
   final int rotationSeconds;
   final int validitySeconds;
+  final String checkoutCode;
+  final int checkoutRotationSeconds;
+  final DateTime? checkoutCodeIssuedAt;
+}
+
+class RotatedCheckoutCode {
+  const RotatedCheckoutCode({
+    required this.code,
+    required this.issuedAt,
+  });
+
+  final String code;
+  final DateTime issuedAt;
 }
 
 class CheckInRecord {

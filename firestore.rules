@@ -33,6 +33,75 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/courseClasses/$(courseClassId)/students/$(studentId)).data;
     }
 
+    // A student submits the checkout code with the attendance write. Rules
+    // compare it against the private, current code without granting students
+    // read access to attendanceCheckoutCodes.
+    function validStudentCheckIn(courseClassId, slotKey, studentId) {
+      let attendance = request.resource.data;
+      let student = studentData(courseClassId, studentId);
+      let session = sessionData(attendance.sessionId);
+      let qr = tokenData(attendance.qrToken);
+      let checkout = get(/databases/$(database)/documents/attendanceCheckoutCodes/$(attendance.sessionId)).data;
+      return isGoogleUser()
+        && attendance.keys().hasOnly([
+          'ownerUid', 'firebaseUid', 'studentId', 'email', 'emailNormalized',
+          'studentCode', 'fullName', 'sessionId', 'courseClassId', 'subject',
+          'classCode', 'slot', 'slotKey', 'date', 'qrToken', 'checkoutCode',
+          'checkedInAt', 'createdAt', 'updatedAt', 'updatedBy', 'syncStatus',
+          'attendanceStatus', 'recordSource'
+        ])
+        && attendance.studentId == studentId
+        && attendance.courseClassId == courseClassId
+        && attendance.slotKey == slotKey
+        && attendance.firebaseUid == request.auth.uid
+        && attendance.updatedBy == request.auth.uid
+        && attendance.emailNormalized == request.auth.token.email
+        && student.emailNormalized == request.auth.token.email
+        && student.active == true
+        && attendance.email == student.email
+        && attendance.studentCode == student.studentCode
+        && attendance.fullName == student.fullName
+        && attendance.sessionId is string
+        && session.ownerUid == attendance.ownerUid
+        && session.courseClassId == courseClassId
+        && session.subject == attendance.subject
+        && session.classCode == attendance.classCode
+        && session.slot == attendance.slot
+        && session.slotKey == slotKey
+        && session.date == attendance.date
+        && session.status == 'active'
+        && qr.sessionId == attendance.sessionId
+        && qr.ownerUid == session.ownerUid
+        && qr.issuedAt is timestamp
+        && qr.validitySeconds is int
+        && qr.validitySeconds >= 2
+        && qr.validitySeconds <= 120
+        && request.time <= qr.issuedAt
+          + duration.value(qr.validitySeconds, 's')
+        && qr.qrGeneration is int
+        && session.currentQrGeneration is int
+        && qr.qrGeneration <= session.currentQrGeneration
+        && qr.validitySeconds == session.validitySeconds
+        && attendance.checkoutCode is string
+        && attendance.checkoutCode.matches('^[A-Z0-9]{5}$')
+        && checkout.ownerUid == session.ownerUid
+        && checkout.sessionId == attendance.sessionId
+        && checkout.code == attendance.checkoutCode
+        && checkout.rotationSeconds is int
+        && checkout.rotationSeconds >= 10
+        && checkout.rotationSeconds <= 3600
+        && checkout.issuedAt is timestamp
+        && request.time <= checkout.issuedAt
+          + duration.value(checkout.rotationSeconds, 's')
+          + duration.value(3, 's')
+        && attendance.checkedInAt == request.time
+        && attendance.createdAt == request.time
+        && attendance.updatedAt == request.time
+        && attendance.syncStatus == 'pending'
+        && attendance.attendanceStatus == 'present'
+        && attendance.recordSource == 'qr';
+    }
+
     function ownsCourse(courseClassId) {
       return isTeacher()
         && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
@@ -157,6 +226,52 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // The checkout code is private to teachers and the check-in callable.
+    // Students submit it to the callable, which validates it server-side.
+    match /attendanceCheckoutCodes/{sessionId} {
+      allow get: if isTeacher()
+        && (
+          !exists(/databases/$(database)/documents/attendanceCheckoutCodes/$(sessionId))
+          || resource.data.ownerUid == request.auth.uid
+        );
+      allow list: if false;
+      allow create: if isTeacher()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.sessionId == sessionId
+        && request.resource.data.code is string
+        && request.resource.data.code.matches('^[A-Z0-9]{5}$')
+        && request.resource.data.rotationSeconds is int
+        && request.resource.data.rotationSeconds >= 10
+        && request.resource.data.rotationSeconds <= 3600
+        && request.resource.data.generation == 1
+        && request.resource.data.issuedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'sessionId', 'code', 'rotationSeconds',
+          'generation', 'issuedAt'
+        ])
+        && sessionDataAfter(sessionId).ownerUid == request.auth.uid
+        && sessionDataAfter(sessionId).status == 'active';
+      allow update: if isTeacher()
+        && resource.data.ownerUid == request.auth.uid
+        && resource.data.sessionId == sessionId
+        && sessionData(sessionId).status == 'active'
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.sessionId == sessionId
+        && request.resource.data.code is string
+        && request.resource.data.code.matches('^[A-Z0-9]{5}$')
+        && request.resource.data.rotationSeconds == resource.data.rotationSeconds
+        && request.resource.data.generation == resource.data.generation + 1
+        && request.resource.data.issuedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'sessionId', 'code', 'rotationSeconds',
+          'generation', 'issuedAt'
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'code', 'generation', 'issuedAt'
+        ]);
+      allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+    }
+
     match /qrTokens/{token} {
       allow get: if (isTeacher() && resource.data.ownerUid == request.auth.uid)
         || (isGoogleUser()
@@ -177,13 +292,13 @@ service cloud.firestore {
         && request.resource.data.validitySeconds >= 2
         && request.resource.data.validitySeconds <= 120
         && request.resource.data.qrGeneration is int
-        && sessionData(request.resource.data.sessionId).ownerUid == request.auth.uid
-        && sessionData(request.resource.data.sessionId).status == 'active'
+        && sessionDataAfter(request.resource.data.sessionId).ownerUid == request.auth.uid
+        && sessionDataAfter(request.resource.data.sessionId).status == 'active'
         // Task 1.3: Token phải thuộc đúng generation hiện tại của session.
         && request.resource.data.qrGeneration
-          == sessionData(request.resource.data.sessionId).currentQrGeneration
+          == sessionDataAfter(request.resource.data.sessionId).currentQrGeneration
         && request.resource.data.validitySeconds
-          == sessionData(request.resource.data.sessionId).validitySeconds;
+          == sessionDataAfter(request.resource.data.sessionId).validitySeconds;
       allow update: if false;
       allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
     }
@@ -218,61 +333,9 @@ service cloud.firestore {
             == request.auth.token.email);
       allow list: if ownsCourse(courseClassId);
 
-      // Task 1.3: Branch sinh viên (QR check-in) – whitelist đầy đủ field, chỉ present/qr.
-      allow create: if isGoogleUser()
-        && request.resource.data.studentId == studentId
-        && request.resource.data.firebaseUid == request.auth.uid
-        && request.resource.data.email == request.auth.token.email
-        && request.resource.data.emailNormalized == request.auth.token.email
-        && studentData(courseClassId, studentId).active == true
-        && studentData(courseClassId, studentId).emailNormalized
-          == request.resource.data.emailNormalized
-        && request.resource.data.studentCode
-          == studentData(courseClassId, studentId).studentCode
-        && request.resource.data.fullName
-          == studentData(courseClassId, studentId).fullName
-        && request.resource.data.courseClassId == courseClassId
-        && request.resource.data.slotKey == slotKey
-        // Task 1.3: Whitelist đầy đủ – không cho field dư ngoài danh sách.
-        && request.resource.data.keys().hasOnly([
-          'ownerUid', 'firebaseUid', 'studentId', 'email', 'emailNormalized',
-          'studentCode', 'fullName', 'sessionId', 'courseClassId',
-          'subject', 'classCode', 'slot', 'slotKey', 'date', 'qrToken',
-          'checkedInAt', 'createdAt', 'updatedAt', 'updatedBy', 'syncStatus',
-          'attendanceStatus', 'recordSource'
-        ])
-        // Chỉ present/qr (sinh viên không tự đặt absent/excused).
-        && request.resource.data.attendanceStatus == 'present'
-        && request.resource.data.recordSource == 'qr'
-        && request.resource.data.checkedInAt == request.time
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time
-        && request.resource.data.updatedBy == request.auth.uid
-        && request.resource.data.syncStatus == 'pending'
-        && sessionData(request.resource.data.sessionId).status == 'active'
-        && request.resource.data.ownerUid
-          == sessionData(request.resource.data.sessionId).ownerUid
-        && request.resource.data.courseClassId
-          == sessionData(request.resource.data.sessionId).courseClassId
-        && request.resource.data.subject
-          == sessionData(request.resource.data.sessionId).subject
-        && request.resource.data.classCode
-          == sessionData(request.resource.data.sessionId).classCode
-        && request.resource.data.slot
-          == sessionData(request.resource.data.sessionId).slot
-        && request.resource.data.slotKey
-          == sessionData(request.resource.data.sessionId).slotKey
-        && request.resource.data.date
-          == sessionData(request.resource.data.sessionId).date
-        && tokenData(request.resource.data.qrToken).sessionId
-          == request.resource.data.sessionId
-        && tokenData(request.resource.data.qrToken).issuedAt is timestamp
-        && tokenData(request.resource.data.qrToken).validitySeconds is int
-        && request.time <= tokenData(request.resource.data.qrToken).issuedAt
-          + duration.value(tokenData(request.resource.data.qrToken).validitySeconds, 's')
-        // Task 1.3: Chỉ chấp nhận QR của generation hiện tại.
-        && tokenData(request.resource.data.qrToken).qrGeneration
-          == sessionData(request.resource.data.sessionId).currentQrGeneration;
+      // Students can create their own canonical record only when the current
+      // QR and private checkout code both validate at write time.
+      allow create: if validStudentCheckIn(courseClassId, slotKey, studentId);
 
       // Branch giảng viên/policy: chỉ teacher có thể create/update với mọi status.
       // Sinh viên hoàn toàn không được update hoặc delete record của mình.

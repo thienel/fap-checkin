@@ -68,6 +68,27 @@ h1 { margin: 0; font-size: 30px; line-height: 1.16; letter-spacing: -.025em; }
 .primary-button:disabled { cursor: wait; opacity: .7; }
 .primary-button svg { width: 22px; height: 22px; }
 
+.checkout-form { display: grid; gap: 10px; text-align: left; }
+.field-label { color: #35545e; font-size: 13px; font-weight: 750; }
+.checkout-form input {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 14px;
+  border: 1px solid #c9d9de;
+  border-radius: 12px;
+  outline: none;
+  color: #17343d;
+  background: #fbfdfd;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.checkout-form input:focus { border-color: #2b7489; box-shadow: 0 0 0 3px rgba(43, 116, 137, .14); }
+.checkout-form .primary-button { margin-top: 3px; color: white; border-color: #164e63; background: #164e63; }
+
 .status {
   width: 72px;
   height: 72px;

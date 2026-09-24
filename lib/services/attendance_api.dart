@@ -616,6 +616,11 @@ class AttendanceApi {
       await activeReference.delete();
       return null;
     }
+    final checkout = await _firestore
+        .collection('attendanceCheckoutCodes')
+        .doc(session.id)
+        .get();
+    final checkoutIssuedAt = checkout.data()?['issuedAt'];
     var slotCount = 0;
     int? daySlot;
     final courseClassId = data['courseClassId'];
@@ -636,6 +641,12 @@ class AttendanceApi {
     return AttendanceSession.fromMap({
       ...data,
       'sessionId': session.id,
+      'checkoutCode': checkout.data()?['code'] as String? ?? '',
+      'checkoutRotationSeconds':
+          (checkout.data()?['rotationSeconds'] as num?)?.toInt() ?? 30,
+      'checkoutCodeIssuedAt': checkoutIssuedAt is Timestamp
+          ? checkoutIssuedAt.toDate().toIso8601String()
+          : null,
       'slotCount': slotCount,
       'daySlot': ?daySlot,
     });
@@ -645,6 +656,7 @@ class AttendanceApi {
     required TodaySlot slot,
     required int rotationSeconds,
     required int validitySeconds,
+    required int checkoutRotationSeconds,
   }) => _guard(() async {
     final uid = _teacherUid();
     if (rotationSeconds < 1 || rotationSeconds > 60) {
@@ -660,6 +672,12 @@ class AttendanceApi {
         'Thời hạn QR phải lớn hơn hoặc bằng chu kỳ đổi QR.',
       );
     }
+    if (checkoutRotationSeconds < 10 || checkoutRotationSeconds > 3600) {
+      throw const AttendanceApiException(
+        'Chu kỳ đổi checkout code phải từ 10 đến 3600 giây.',
+      );
+    }
+    final initialCheckoutCode = _newCheckoutCode();
 
     final courseReference = _firestore
         .collection('courseClasses')
@@ -668,6 +686,9 @@ class AttendanceApi {
         .collection('activeAttendanceSessions')
         .doc(uid);
     final sessionReference = _firestore.collection('attendanceSessions').doc();
+    final checkoutCodeReference = _firestore
+        .collection('attendanceCheckoutCodes')
+        .doc(sessionReference.id);
 
     final sessionData = await _firestore.runTransaction((transaction) async {
       final course = await transaction.get(courseReference);
@@ -709,6 +730,14 @@ class AttendanceApi {
         'startedAt': FieldValue.serverTimestamp(),
       };
       transaction.set(sessionReference, data);
+      transaction.set(checkoutCodeReference, {
+        'ownerUid': uid,
+        'sessionId': sessionReference.id,
+        'code': initialCheckoutCode,
+        'rotationSeconds': checkoutRotationSeconds,
+        'generation': 1,
+        'issuedAt': FieldValue.serverTimestamp(),
+      });
       transaction.set(activeReference, {
         'ownerUid': uid,
         'sessionId': sessionReference.id,
@@ -726,13 +755,75 @@ class AttendanceApi {
       date: sessionData['date'] as String,
       ownerUid: uid,
     );
+    final currentCheckoutCode = await rotateCheckoutCode(
+      sessionReference.id,
+    );
 
     return AttendanceSession.fromMap({
       ...sessionData,
       'sessionId': sessionReference.id,
+      'checkoutCode': currentCheckoutCode.code,
+      'checkoutRotationSeconds': checkoutRotationSeconds,
+      'checkoutCodeIssuedAt': currentCheckoutCode.issuedAt.toIso8601String(),
       'slotCount': slot.slotCount,
       if (slot.daySlot != null) 'daySlot': slot.daySlot,
     });
+  });
+
+  Future<RotatedCheckoutCode> rotateCheckoutCode(
+    String sessionId,
+  ) => _guard(() async {
+    final uid = _teacherUid();
+    final sessionReference = _firestore
+        .collection('attendanceSessions')
+        .doc(sessionId);
+    final checkoutReference = _firestore
+        .collection('attendanceCheckoutCodes')
+        .doc(sessionId);
+    late String nextCode;
+
+    await _firestore.runTransaction((transaction) async {
+      final session = await transaction.get(sessionReference);
+      final checkout = await transaction.get(checkoutReference);
+      final sessionData = session.data();
+      final checkoutData = checkout.data();
+      if (!session.exists ||
+          sessionData == null ||
+          sessionData['ownerUid'] != uid ||
+          sessionData['status'] != 'active' ||
+          !checkout.exists ||
+          checkoutData == null ||
+          checkoutData['ownerUid'] != uid ||
+          checkoutData['sessionId'] != sessionId) {
+        throw const AttendanceApiException(
+          'Không thể đổi checkout code của phiên này.',
+        );
+      }
+
+      final generation = (checkoutData['generation'] as num?)?.toInt() ?? 0;
+      nextCode = _newCheckoutCode(excluding: checkoutData['code'] as String?);
+      transaction.update(checkoutReference, {
+        'code': nextCode,
+        'generation': generation + 1,
+        'issuedAt': FieldValue.serverTimestamp(),
+      });
+    });
+
+    final updated = await checkoutReference.get(
+      const GetOptions(source: Source.server),
+    );
+    final data = updated.data();
+    final code = data?['code'];
+    final issuedAt = data?['issuedAt'];
+    if (code is! String || issuedAt is! Timestamp) {
+      throw const AttendanceApiException(
+        'Không đọc được checkout code mới từ Firebase.',
+      );
+    }
+    return RotatedCheckoutCode(
+      code: code,
+      issuedAt: issuedAt.toDate(),
+    );
   });
 
   Future<void> setAttendancePolicy({
@@ -1348,6 +1439,18 @@ class AttendanceApi {
   String _newToken() {
     final bytes = List<int>.generate(32, (_) => _secureRandom.nextInt(256));
     return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
+  String _newCheckoutCode({String? excluding}) {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    String code;
+    do {
+      code = List.generate(
+        5,
+        (_) => alphabet[_secureRandom.nextInt(alphabet.length)],
+      ).join();
+    } while (code == excluding);
+    return code;
   }
 
   Future<T> _guard<T>(Future<T> Function() operation) async {

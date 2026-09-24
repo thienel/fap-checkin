@@ -32,8 +32,28 @@
           Tiếp tục với Google
         </button>
 
+        <form id="checkout-form" class="checkout-form hidden">
+          <label class="field-label" for="checkout-code">Checkout code</label>
+          <input
+            id="checkout-code"
+            name="checkoutCode"
+            type="text"
+            inputmode="text"
+            autocomplete="one-time-code"
+            autocapitalize="characters"
+            minlength="4"
+            maxlength="12"
+            pattern="[A-Za-z0-9]{4,12}"
+            spellcheck="false"
+            required
+          />
+          <button id="checkout-submit" class="primary-button" type="submit">
+            Xác nhận điểm danh
+          </button>
+        </form>
+
         <p class="privacy">
-          Hệ thống chỉ sử dụng email Google để ghi nhận điểm danh.
+          Hệ thống dùng email Google và checkout code để xác nhận điểm danh.
         </p>
       </section>
     </main>
