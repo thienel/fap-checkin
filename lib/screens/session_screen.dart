@@ -41,15 +41,9 @@ class _SessionScreenState extends State<SessionScreen> {
   Timer? _rotationTimer;
   Timer? _countdownTimer;
 
-  String _checkoutKey = '';
-  Timer? _checkoutKeyRotationTimer;
-  Timer? _checkoutKeyCountdownTimer;
-
   IssuedQr? _qr;
   final ValueNotifier<IssuedQr?> _qrNotifier = ValueNotifier<IssuedQr?>(null);
   late final ValueNotifier<int> _secondsLeftNotifier;
-  late final ValueNotifier<int> _checkoutKeySecondsLeftNotifier;
-  late final ValueNotifier<String> _checkoutKeyNotifier;
 
   bool _issuing = false;
   bool _stopping = false;
@@ -71,24 +65,19 @@ class _SessionScreenState extends State<SessionScreen> {
 
     _secondsLeftNotifier =
         ValueNotifier<int>(widget.session.rotationSeconds);
-    _checkoutKeySecondsLeftNotifier =
-        ValueNotifier<int>(widget.session.rotationSeconds);
-    _checkoutKey = widget.session.checkoutKey ?? '';
-    _checkoutKeyNotifier = ValueNotifier<String>(_checkoutKey);
 
-    _rotateSession();
+    _issueQr();
 
-    // Timer xoay đồng bộ mã QR và Secret Key
+    // Timer xoay mã QR theo chu kỳ
     _rotationTimer = Timer.periodic(
       Duration(seconds: widget.session.rotationSeconds),
-      (_) => _rotateSession(),
+      (_) => _issueQr(),
     );
 
-    // Timer đếm ngược giây hiển thị trên UI đồng bộ cho cả QR & Secret Key
+    // Timer đếm ngược giây hiển thị trên UI
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_secondsLeftNotifier.value > 0) {
         _secondsLeftNotifier.value -= 1;
-        _checkoutKeySecondsLeftNotifier.value = _secondsLeftNotifier.value;
       }
     });
   }
@@ -99,35 +88,25 @@ class _SessionScreenState extends State<SessionScreen> {
     _countdownTimer?.cancel();
     _qrNotifier.dispose();
     _secondsLeftNotifier.dispose();
-    _checkoutKeySecondsLeftNotifier.dispose();
-    _checkoutKeyNotifier.dispose();
     super.dispose();
   }
 
-  Future<void> _rotateSession() async {
+  Future<void> _issueQr() async {
     if (_issuing || _stopping) return;
     _issuing = true;
     try {
-      final results = await Future.wait([
-        widget.api.issueQr(widget.session.id),
-        widget.api.rotateCheckoutKey(widget.session.id, _checkoutKey),
-      ]);
-      final qr = results[0] as IssuedQr;
-      final newKey = results[1] as String;
+      final qr = await widget.api.issueQr(widget.session.id);
       if (mounted) {
         setState(() {
           _qr = qr;
           _qrNotifier.value = qr;
-          _checkoutKey = newKey;
-          _checkoutKeyNotifier.value = newKey;
           _secondsLeftNotifier.value = widget.session.rotationSeconds;
-          _checkoutKeySecondsLeftNotifier.value = widget.session.rotationSeconds;
           _error = null;
         });
       }
     } catch (error) {
       if (mounted) {
-        setState(() => _error = 'Không tạo được QR/Key mới: $error');
+        setState(() => _error = 'Không tạo được QR mới: $error');
       }
     } finally {
       _issuing = false;
@@ -178,8 +157,6 @@ class _SessionScreenState extends State<SessionScreen> {
     setState(() => _stopping = true);
     _rotationTimer?.cancel();
     _countdownTimer?.cancel();
-    _checkoutKeyRotationTimer?.cancel();
-    _checkoutKeyCountdownTimer?.cancel();
     try {
       await widget.api.stopAttendance(widget.session.id);
       if (mounted) Navigator.of(context).pop();
@@ -225,8 +202,6 @@ class _SessionScreenState extends State<SessionScreen> {
         session: widget.session,
         qrNotifier: _qrNotifier,
         countdownNotifier: _secondsLeftNotifier,
-        checkoutKeyNotifier: _checkoutKeyNotifier,
-        checkoutKeyCountdownNotifier: _checkoutKeySecondsLeftNotifier,
       ),
     );
   }
@@ -663,52 +638,6 @@ class _SessionScreenState extends State<SessionScreen> {
                       'Phóng to cho máy chiếu',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE2E8F0)),
-                  ),
-                  child: Column(
-                    children: [
-                      const Text(
-                        'MÃ XÁC NHẬN (NỘP FORM)',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _checkoutKey,
-                        style: const TextStyle(
-                          fontSize: 28,
-                          letterSpacing: 4,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF0F172A),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      ValueListenableBuilder<int>(
-                        valueListenable: _checkoutKeySecondsLeftNotifier,
-                        builder: (context, seconds, _) {
-                          return Text(
-                            'Đổi sau: ${seconds}s',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFFE11D48),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          );
-                        },
-                      ),
-                    ],
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -1657,15 +1586,11 @@ class _FullscreenQrDialog extends StatelessWidget {
     required this.session,
     required this.qrNotifier,
     required this.countdownNotifier,
-    required this.checkoutKeyNotifier,
-    required this.checkoutKeyCountdownNotifier,
   });
 
   final AttendanceSession session;
   final ValueNotifier<IssuedQr?> qrNotifier;
   final ValueNotifier<int> countdownNotifier;
-  final ValueNotifier<String> checkoutKeyNotifier;
-  final ValueNotifier<int> checkoutKeyCountdownNotifier;
 
   @override
   Widget build(BuildContext context) {
@@ -1779,120 +1704,68 @@ class _FullscreenQrDialog extends StatelessWidget {
                                 );
                               }
 
-                              return SingleChildScrollView(
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(24),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white,
-                                        borderRadius: BorderRadius.circular(28),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black
-                                                .withValues(alpha: 0.5),
-                                            blurRadius: 40,
-                                            spreadRadius: 8,
-                                          ),
-                                        ],
-                                      ),
-                                      child: QrImageView(
-                                        data: qr.url,
-                                        version: QrVersions.auto,
-                                        size: qrSize,
-                                        gapless: false,
-                                      ),
+                              return Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(24),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(28),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black
+                                              .withValues(alpha: 0.5),
+                                          blurRadius: 40,
+                                          spreadRadius: 8,
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(height: 24),
-                                    ValueListenableBuilder<int>(
-                                      valueListenable: countdownNotifier,
-                                      builder: (context, seconds, _) {
-                                        return Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 16,
-                                            vertical: 8,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.1),
-                                            borderRadius:
-                                                BorderRadius.circular(30),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              const Icon(
-                                                Icons.sync_rounded,
-                                                size: 16,
-                                                color: Color(0xFF2DD4BF),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                'Mã tự động đổi sau: ${seconds.toString().padLeft(2, '0')} giây',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
+                                    child: QrImageView(
+                                      data: qr.url,
+                                      version: QrVersions.auto,
+                                      size: qrSize,
+                                      gapless: false,
                                     ),
-                                    const SizedBox(height: 32),
-                                    // Hiển thị Checkout Key trên máy chiếu
-                                    ValueListenableBuilder<String>(
-                                      valueListenable: checkoutKeyNotifier,
-                                      builder: (context, checkoutKey, _) {
-                                        return Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white,
-                                            borderRadius: BorderRadius.circular(20),
-                                          ),
-                                          child: Column(
-                                            children: [
-                                              const Text(
-                                                'MÃ XÁC NHẬN ĐIỂM DANH',
-                                                style: TextStyle(
-                                                  color: Color(0xFF475569),
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
+                                  ),
+                                  const SizedBox(height: 24),
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: countdownNotifier,
+                                    builder: (context, seconds, _) {
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.1),
+                                          borderRadius:
+                                              BorderRadius.circular(30),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.sync_rounded,
+                                              size: 16,
+                                              color: Color(0xFF2DD4BF),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Mã tự động đổi sau: ${seconds.toString().padLeft(2, '0')} giây',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
                                               ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                checkoutKey,
-                                                style: const TextStyle(
-                                                  color: Color(0xFF0F172A),
-                                                  fontSize: 48,
-                                                  letterSpacing: 8,
-                                                  fontWeight: FontWeight.w900,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              ValueListenableBuilder<int>(
-                                                valueListenable: checkoutKeyCountdownNotifier,
-                                                builder: (context, seconds, _) {
-                                                  return Text(
-                                                    'Mã sẽ đổi sau: $seconds giây',
-                                                    style: const TextStyle(
-                                                      color: Color(0xFFE11D48),
-                                                      fontSize: 16,
-                                                      fontWeight: FontWeight.w700,
-                                                    ),
-                                                  );
-                                                },
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ],
-                                ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
                               );
                             },
                           );
