@@ -267,7 +267,8 @@ class _SessionScreenState extends State<SessionScreen> {
     );
   }
 
-  void _showStudentDetail(CourseStudent student) {
+  void _showStudentDetail(LiveStudentAttendance attendance) {
+    final student = attendance.student;
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -413,14 +414,135 @@ class _SessionScreenState extends State<SessionScreen> {
           ),
         ),
         actions: [
-          FilledButton.tonal(
+          TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Đóng'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              unawaited(_editLiveAttendance(attendance));
+            },
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Sửa trạng thái'),
           ),
         ],
       ),
     );
   }
+
+  Future<({AttendanceStatus status, String reason})?>
+  _attendanceChangeDialog(LiveStudentAttendance attendance) {
+    var selected = attendance.status == AttendanceStatus.notYetOpen
+        ? AttendanceStatus.absent
+        : attendance.status;
+    var reason = '';
+    return showDialog<({AttendanceStatus status, String reason})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Cập nhật trạng thái điểm danh'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${attendance.displayName} · Buổi ${widget.session.slot}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Hiện tại: ${_attendanceStatusLabel(attendance.status)}',
+                  style: const TextStyle(color: Color(0xFF64748B)),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<AttendanceStatus>(
+                  initialValue: selected,
+                  decoration: const InputDecoration(
+                    labelText: 'Trạng thái mới',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: AttendanceStatus.present,
+                      child: Text('Có mặt'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.absent,
+                      child: Text('Vắng'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.excused,
+                      child: Text('Có phép'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setDialogState(() => selected = value);
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  autofocus: true,
+                  maxLength: 300,
+                  onChanged: (value) => setDialogState(() => reason = value),
+                  decoration: const InputDecoration(
+                    labelText: 'Lý do bắt buộc',
+                    hintText: 'Ví dụ: Giảng viên xác nhận có mặt',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: reason.trim().length < 3
+                  ? null
+                  : () => Navigator.pop(dialogContext, (
+                      status: selected,
+                      reason: reason.trim(),
+                    )),
+              child: const Text('Lưu thay đổi'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editLiveAttendance(LiveStudentAttendance attendance) async {
+    final change = await _attendanceChangeDialog(attendance);
+    if (change == null || !mounted) return;
+    try {
+      await widget.api.adjustAttendance(
+        courseClassId: widget.session.courseClassId,
+        slot: widget.session.slot,
+        studentId: attendance.student.id,
+        status: change.status,
+        reason: change.reason,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đã cập nhật trạng thái điểm danh.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Cập nhật chưa hoàn tất: $error')),
+      );
+    }
+  }
+
+  String _attendanceStatusLabel(AttendanceStatus status) => switch (status) {
+    AttendanceStatus.present => 'Có mặt',
+    AttendanceStatus.absent => 'Vắng',
+    AttendanceStatus.excused => 'Có phép',
+    AttendanceStatus.notYetOpen => 'Chưa điểm danh',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -1401,7 +1523,7 @@ class _SessionScreenState extends State<SessionScreen> {
               return _StudentListTile(
                 index: index + 1,
                 item: item,
-                onTap: () => _showStudentDetail(item.student),
+                onTap: () => _showStudentDetail(item),
               );
             },
           ),
