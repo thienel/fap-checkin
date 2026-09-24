@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../domain/class_overview.dart';
 import '../domain/models.dart';
 import '../domain/schedule.dart';
 import '../services/attendance_api.dart';
@@ -29,6 +30,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _showWeek = false;
   bool _showRoster = false;
   bool _showOverview = false;
+  bool _movingScheduleSlot = false;
   late DateTime _weekStart;
 
   @override
@@ -64,6 +66,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _showOverview = false;
     _showWeek = showWeek;
     if (showWeek) _weekStart = startOfWeek(DateTime.now());
+    _refresh();
+  }
+
+  void _openWeekSchedule() {
+    _showRoster = false;
+    _showOverview = false;
+    _showWeek = true;
+    _weekStart = startOfWeek(DateTime.now());
     _refresh();
   }
 
@@ -160,47 +170,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
         index: const FixedColumnWidth(168),
     };
 
-    return SingleChildScrollView(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Table(
-          columnWidths: columnWidths,
-          border: TableBorder.all(color: const Color(0xFFD8E2E5)),
-          defaultVerticalAlignment: TableCellVerticalAlignment.top,
-          children: [
-            TableRow(
-              decoration: const BoxDecoration(color: Color(0xFF245F82)),
-              children: [
-                _weekHeaderCell('Slot trong ngày', null),
-                for (final date in dates)
-                  _weekHeaderCell(_weekdayLabel(date.weekday), date),
-              ],
-            ),
-            for (final daySlot in rowSlots)
-              TableRow(
-                decoration: BoxDecoration(
-                  color: daySlot == null
-                      ? const Color(0xFFFFF7E3)
-                      : Colors.white,
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEAF5F2),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.drag_indicator, color: Color(0xFF167052), size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Kéo slot tương lai vào ô trống để đổi ngày/giờ. Slot hôm nay và đã qua bị khóa; nhấn slot đã qua để xem điểm danh.',
+                  style: TextStyle(color: Color(0xFF245F58), fontSize: 13),
                 ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Table(
+                columnWidths: columnWidths,
+                border: TableBorder.all(color: const Color(0xFFD8E2E5)),
+                defaultVerticalAlignment: TableCellVerticalAlignment.top,
                 children: [
-                  _daySlotCell(daySlot),
-                  for (final date in dates)
-                    _weekScheduleCell(
-                      slots
-                          .where(
-                            (slot) =>
-                                slot.daySlot == daySlot &&
-                                slot.date == _isoDate(date),
-                          )
-                          .toList(),
-                      date,
+                  TableRow(
+                    decoration: const BoxDecoration(color: Color(0xFF245F82)),
+                    children: [
+                      _weekHeaderCell('Slot trong ngày', null),
+                      for (final date in dates)
+                        _weekHeaderCell(_weekdayLabel(date.weekday), date),
+                    ],
+                  ),
+                  for (final daySlot in rowSlots)
+                    TableRow(
+                      decoration: BoxDecoration(
+                        color: daySlot == null
+                            ? const Color(0xFFFFF7E3)
+                            : Colors.white,
+                      ),
+                      children: [
+                        _daySlotCell(daySlot),
+                        for (final date in dates)
+                          _weekScheduleCell(
+                            slots
+                                .where(
+                                  (slot) =>
+                                      slot.daySlot == daySlot &&
+                                      slot.date == _isoDate(date),
+                                )
+                                .toList(),
+                            date,
+                            daySlot,
+                          ),
+                      ],
                     ),
                 ],
               ),
-          ],
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -267,82 +305,447 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _weekScheduleCell(List<TodaySlot> slots, DateTime date) {
-    return Container(
-      constraints: const BoxConstraints(minHeight: 112),
-      color: isSameDate(date, DateTime.now()) ? const Color(0xFFF1FBF8) : null,
-      padding: const EdgeInsets.all(8),
-      child: slots.isEmpty
-          ? const Text('–', style: TextStyle(color: Color(0xFF9AABAF)))
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var index = 0; index < slots.length; index++) ...[
-                  if (index > 0) const SizedBox(height: 8),
-                  _weekCourseCard(slots[index], date),
-                ],
-              ],
+  Widget _weekScheduleCell(
+    List<TodaySlot> slots,
+    DateTime date,
+    int? daySlot,
+  ) {
+    final targetDate = _isoDate(date);
+    final today = _isoDate(DateTime.now());
+    final canReceive = daySlot != null &&
+        targetDate.compareTo(today) > 0 &&
+        date.weekday != DateTime.sunday &&
+        !_movingScheduleSlot;
+    return DragTarget<TodaySlot>(
+      onWillAcceptWithDetails: (details) {
+        if (!canReceive) return false;
+        return !slots.any(
+          (occupied) =>
+              occupied.courseClassId != details.data.courseClassId ||
+              occupied.slot != details.data.slot,
+        );
+      },
+      onAcceptWithDetails: (details) => unawaited(
+        _moveScheduleSlot(details.data, date, daySlot),
+      ),
+      builder: (context, candidateData, rejectedData) {
+        final isValidHover = candidateData.isNotEmpty;
+        final isRejectedHover = rejectedData.isNotEmpty;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          constraints: const BoxConstraints(minHeight: 112),
+          decoration: BoxDecoration(
+            color: isValidHover
+                ? const Color(0xFFD9F3E8)
+                : isRejectedHover
+                ? const Color(0xFFFFE8E8)
+                : isSameDate(date, DateTime.now())
+                ? const Color(0xFFF1FBF8)
+                : null,
+            border: Border.all(
+              color: isValidHover
+                  ? const Color(0xFF329C72)
+                  : isRejectedHover
+                  ? const Color(0xFFD66A6A)
+                  : Colors.transparent,
+              width: isValidHover || isRejectedHover ? 2 : 0,
             ),
+          ),
+          padding: const EdgeInsets.all(8),
+          child: slots.isEmpty
+              ? Text(
+                  isValidHover ? 'Thả để chuyển slot' : '–',
+                  style: TextStyle(
+                    color: isValidHover
+                        ? const Color(0xFF167052)
+                        : const Color(0xFF9AABAF),
+                    fontWeight: isValidHover ? FontWeight.w700 : null,
+                  ),
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var index = 0; index < slots.length; index++) ...[
+                      if (index > 0) const SizedBox(height: 8),
+                      _weekCourseCard(slots[index], date),
+                    ],
+                  ],
+                ),
+        );
+      },
     );
   }
 
   Widget _weekCourseCard(TodaySlot slot, DateTime date) {
     final canStart = isSameDate(date, DateTime.now());
+    final today = DateTime.now();
+    final normalizedToday = DateTime(today.year, today.month, today.day);
+    final normalizedDate = DateTime(date.year, date.month, date.day);
+    final isPast = normalizedDate.isBefore(normalizedToday);
+    final canMove = !canStart && !isPast && !_movingScheduleSlot;
     final total = slot.slotCount > 0 ? '/${slot.slotCount}' : '';
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(
-          color: canStart ? const Color(0xFF79C9B3) : const Color(0xFFC9D6DA),
-        ),
+    final card = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: isPast ? () => _showPastSlotAttendance(slot) : null,
         borderRadius: BorderRadius.circular(8),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x11000000),
-            blurRadius: 4,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(9),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              slot.subject,
-              style: const TextStyle(
-                color: Color(0xFF17658C),
-                fontWeight: FontWeight.w800,
-              ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(
+              color: canStart
+                  ? const Color(0xFF79C9B3)
+                  : const Color(0xFFC9D6DA),
             ),
-            Text(slot.classCode, style: const TextStyle(fontSize: 12)),
-            const SizedBox(height: 5),
-            Text(
-              'Buổi ${slot.slot}$total',
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF52666D),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            if (canStart) ...[
-              const SizedBox(height: 7),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  onPressed: () => _start(slot),
-                  icon: const Icon(Icons.play_arrow, size: 17),
-                  label: const Text('Điểm danh'),
-                ),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x11000000),
+                blurRadius: 4,
+                offset: Offset(0, 2),
               ),
             ],
-          ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(9),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        slot.subject,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF17658C),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    if (canMove)
+                      const Icon(
+                        Icons.drag_indicator,
+                        size: 17,
+                        color: Color(0xFF779099),
+                      )
+                    else if (isPast)
+                      const Icon(
+                        Icons.insights_outlined,
+                        size: 16,
+                        color: Color(0xFF167052),
+                      ),
+                  ],
+                ),
+                Text(
+                  slot.classCode,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'Buổi ${slot.slot}$total',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF52666D),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (canStart) ...[
+                  const SizedBox(height: 7),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: () => _start(slot),
+                      icon: const Icon(Icons.play_arrow, size: 17),
+                      label: const Text('Điểm danh'),
+                    ),
+                  ),
+                ] else if (isPast) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Nhấn để xem điểm danh',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF167052),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Kéo để đổi lịch',
+                    style: TextStyle(fontSize: 10, color: Color(0xFF71858B)),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
+      ),
+    );
+    if (!canMove) return card;
+    return Draggable<TodaySlot>(
+      data: slot,
+      maxSimultaneousDrags: _movingScheduleSlot ? 0 : 1,
+      feedback: Material(
+        color: Colors.transparent,
+        child: SizedBox(width: 150, child: card),
+      ),
+      childWhenDragging: Opacity(opacity: 0.28, child: card),
+      child: card,
+    );
+  }
+
+  Future<void> _moveScheduleSlot(
+    TodaySlot slot,
+    DateTime targetDate,
+    int? targetDaySlot,
+  ) async {
+    if (_movingScheduleSlot || targetDaySlot == null) return;
+    setState(() => _movingScheduleSlot = true);
+    try {
+      await widget.api.moveScheduledSlot(
+        courseClassId: slot.courseClassId,
+        slotNumber: slot.slot,
+        targetDate: targetDate,
+        targetDaySlot: targetDaySlot,
+      );
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Đã chuyển buổi ${slot.slot} sang ${DateFormat('dd/MM/yyyy').format(targetDate)} · Slot $targetDaySlot.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể đổi lịch: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _movingScheduleSlot = false);
+    }
+  }
+
+  void _showPastSlotAttendance(TodaySlot scheduledSlot) {
+    final overviewFuture = widget.api.getCourseOverview(
+      scheduledSlot.courseClassId,
+    );
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => FutureBuilder<CourseOverview>(
+        future: overviewFuture,
+        builder: (context, snapshot) {
+          final title = Text(
+            '${scheduledSlot.subject} · ${scheduledSlot.classCode} · Buổi ${scheduledSlot.slot}',
+          );
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return AlertDialog(
+              title: title,
+              content: const SizedBox(
+                width: 540,
+                height: 220,
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            );
+          }
+          if (snapshot.hasError) {
+            return AlertDialog(
+              title: title,
+              content: Text('Không tải được điểm danh: ${snapshot.error}'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            );
+          }
+
+          final overview = snapshot.requireData;
+          CourseSlotOverview? selectedSlot;
+          for (final item in overview.slots) {
+            if (item.number == scheduledSlot.slot) {
+              selectedSlot = item;
+              break;
+            }
+          }
+          if (selectedSlot == null) {
+            return AlertDialog(
+              title: title,
+              content: const Text('Không tìm thấy dữ liệu của buổi học này.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            );
+          }
+          final reportSlot = selectedSlot;
+
+          final students = overview.students
+              .where((student) => student.active)
+              .toList();
+          final presentCount = students
+              .where(
+                (student) =>
+                    overview.statusFor(student.id, reportSlot) ==
+                    AttendanceStatus.present,
+              )
+              .length;
+          final absentCount = students
+              .where(
+                (student) =>
+                    overview.statusFor(student.id, reportSlot) ==
+                    AttendanceStatus.absent,
+              )
+              .length;
+          final excusedCount = students
+              .where(
+                (student) =>
+                    overview.statusFor(student.id, reportSlot) ==
+                    AttendanceStatus.excused,
+              )
+              .length;
+
+          return AlertDialog(
+            title: title,
+            content: SizedBox(
+              width: 620,
+              height: 520,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Ngày học ${DateFormat('dd/MM/yyyy').format(DateTime.parse(scheduledSlot.date))}',
+                    style: const TextStyle(color: Color(0xFF64748B)),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _AttendanceSummaryCard(
+                          label: 'Tổng SV',
+                          count: students.length,
+                          color: const Color(0xFF1C6A85),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _AttendanceSummaryCard(
+                          label: 'Có mặt',
+                          count: presentCount,
+                          color: const Color(0xFF167052),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _AttendanceSummaryCard(
+                          label: 'Vắng',
+                          count: absentCount,
+                          color: const Color(0xFFB5473C),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _AttendanceSummaryCard(
+                          label: 'Có phép',
+                          count: excusedCount,
+                          color: const Color(0xFF7C3AED),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (!reportSlot.hasOpened) ...[
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Buổi này chưa mở điểm danh nên chưa có thống kê vắng mặt.',
+                      style: TextStyle(color: Color(0xFF805D00)),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Chi tiết sinh viên',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const Divider(height: 16),
+                  Expanded(
+                    child: students.isEmpty
+                        ? const Center(
+                            child: Text('Lớp chưa có sinh viên hoạt động.'),
+                          )
+                        : ListView.separated(
+                            itemCount: students.length,
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final student = students[index];
+                              final status = overview.statusFor(
+                                student.id,
+                                reportSlot,
+                              );
+                              final entry = overview.entryFor(
+                                student.id,
+                                reportSlot.number,
+                              );
+                              final detail = <String>[
+                                if (student.studentCode.isNotEmpty)
+                                  student.studentCode,
+                                student.email,
+                                if (entry?.checkedInAt != null)
+                                  'Lúc ${DateFormat('HH:mm:ss').format(entry!.checkedInAt!)}',
+                                if (entry?.source == 'teacher')
+                                  'Cập nhật bởi giảng viên',
+                              ].join(' · ');
+                              return ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(
+                                  _attendanceStatusIcon(status),
+                                  color: _attendanceStatusColor(status),
+                                ),
+                                title: Text(
+                                  student.displayName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  detail,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: Text(
+                                  _attendanceStatusLabel(status),
+                                  style: TextStyle(
+                                    color: _attendanceStatusColor(status),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Đóng'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -517,7 +920,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           Expanded(
             child: _showOverview
-                ? ClassOverviewScreen(api: widget.api)
+                ? ClassOverviewScreen(
+                    api: widget.api,
+                    onOpenSchedule: _openWeekSchedule,
+                  )
                 : _showRoster
                 ? RosterImportScreen(api: widget.api)
                 : Padding(
@@ -919,3 +1325,68 @@ class _EmptyState extends StatelessWidget {
     );
   }
 }
+
+class _AttendanceSummaryCard extends StatelessWidget {
+  const _AttendanceSummaryCard({
+    required this.label,
+    required this.count,
+    required this.color,
+  });
+
+  final String label;
+  final int count;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$count',
+            style: TextStyle(
+              color: color,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: color, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _attendanceStatusLabel(AttendanceStatus status) => switch (status) {
+  AttendanceStatus.present => 'Có mặt',
+  AttendanceStatus.absent => 'Vắng',
+  AttendanceStatus.excused => 'Có phép',
+  AttendanceStatus.notYetOpen => 'Chưa mở',
+};
+
+IconData _attendanceStatusIcon(AttendanceStatus status) => switch (status) {
+  AttendanceStatus.present => Icons.check_circle_outline,
+  AttendanceStatus.absent => Icons.cancel_outlined,
+  AttendanceStatus.excused => Icons.verified_user_outlined,
+  AttendanceStatus.notYetOpen => Icons.schedule_outlined,
+};
+
+Color _attendanceStatusColor(AttendanceStatus status) => switch (status) {
+  AttendanceStatus.present => const Color(0xFF167052),
+  AttendanceStatus.absent => const Color(0xFFB5473C),
+  AttendanceStatus.excused => const Color(0xFF7C3AED),
+  AttendanceStatus.notYetOpen => const Color(0xFF7B898D),
+};

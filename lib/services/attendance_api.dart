@@ -598,6 +598,174 @@ class AttendanceApi {
         return slots;
       });
 
+  Future<void> moveScheduledSlot({
+    required String courseClassId,
+    required int slotNumber,
+    required DateTime targetDate,
+    required int targetDaySlot,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    _validateDaySlot(targetDaySlot);
+    final normalizedTarget = DateTime(
+      targetDate.year,
+      targetDate.month,
+      targetDate.day,
+    );
+    final targetDateKey = _isoDate(normalizedTarget);
+    final todayKey = _isoDate(DateTime.now());
+    if (targetDateKey.compareTo(todayKey) <= 0) {
+      throw const AttendanceApiException(
+        'Chỉ có thể chuyển slot sang ngày mai hoặc ngày trong tương lai.',
+      );
+    }
+    if (normalizedTarget.weekday == DateTime.sunday) {
+      throw const AttendanceApiException('Không thể xếp lịch vào Chủ nhật.');
+    }
+
+    final coursesReference = _firestore.collection('courseClasses');
+    final courseReference = coursesReference.doc(courseClassId);
+
+    // Check the stored schedules as well as the lock below. This catches old
+    // courses that were created before schedule locks were introduced.
+    final teacherCourses = await coursesReference
+        .where('ownerUid', isEqualTo: uid)
+        .get();
+    for (final course in teacherCourses.docs) {
+      final data = course.data();
+      final rawSchedule = data['schedule'];
+      if (rawSchedule is! List) continue;
+      for (final rawSlot in rawSchedule) {
+        if (rawSlot is! Map) continue;
+        final scheduled = Map<String, dynamic>.from(rawSlot);
+        if (course.id == courseClassId &&
+            (scheduled['number'] as num?)?.toInt() == slotNumber) {
+          continue;
+        }
+        final scheduledDaySlot =
+            (scheduled['daySlot'] as num?)?.toInt() ??
+            (data['daySlot'] as num?)?.toInt();
+        if (scheduled['date'] == targetDateKey &&
+            scheduledDaySlot == targetDaySlot) {
+          final occupiedCourse =
+              '${data['subject'] ?? course.id} ${data['classCode'] ?? ''}'
+                  .trim();
+          final occupiedSlot = (scheduled['number'] as num?)?.toInt();
+          throw AttendanceApiException(
+            'Ô này đã có $occupiedCourse'
+            '${occupiedSlot == null ? '' : ' · buổi $occupiedSlot'}. '
+            'Hãy chọn một ô trống.',
+          );
+        }
+      }
+    }
+
+    final lockCollection = _firestore.collection('teacherScheduleLocks');
+    await _firestore.runTransaction((transaction) async {
+      final courseSnapshot = await transaction.get(courseReference);
+      final courseData = courseSnapshot.data();
+      if (!courseSnapshot.exists ||
+          courseData == null ||
+          courseData['ownerUid'] != uid) {
+        throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+      }
+
+      final rawSchedule = courseData['schedule'];
+      if (rawSchedule is! List) {
+        throw const AttendanceApiException('Lịch môn–lớp không hợp lệ.');
+      }
+      final schedule = rawSchedule
+          .whereType<Map>()
+          .map(Map<String, dynamic>.from)
+          .toList();
+      final sourceIndex = schedule.indexWhere(
+        (item) => (item['number'] as num?)?.toInt() == slotNumber,
+      );
+      if (sourceIndex < 0) {
+        throw const AttendanceApiException('Không tìm thấy slot cần chuyển.');
+      }
+
+      final source = schedule[sourceIndex];
+      final sourceDate = source['date'] as String?;
+      if (sourceDate == null) {
+        throw const AttendanceApiException('Ngày của slot không hợp lệ.');
+      }
+      if (sourceDate.compareTo(todayKey) <= 0) {
+        throw const AttendanceApiException(
+          'Slot hôm nay hoặc đã qua không thể thay đổi lịch.',
+        );
+      }
+      final sourceDaySlot =
+          (source['daySlot'] as num?)?.toInt() ??
+          (courseData['daySlot'] as num?)?.toInt();
+      if (sourceDate == targetDateKey && sourceDaySlot == targetDaySlot) {
+        return;
+      }
+
+      final targetLockReference = lockCollection.doc(
+        '${uid}_${targetDateKey}_$targetDaySlot',
+      );
+      final sourceLockReference = sourceDaySlot == null
+          ? null
+          : lockCollection.doc('${uid}_${sourceDate}_$sourceDaySlot');
+      final sourceLockSnapshot = sourceLockReference == null
+          ? null
+          : await transaction.get(sourceLockReference);
+      final targetLockSnapshot = await transaction.get(targetLockReference);
+
+      if (targetLockSnapshot.exists) {
+        final targetLock = targetLockSnapshot.data()!;
+        final isThisSlot =
+            targetLock['courseClassId'] == courseClassId &&
+            (targetLock['slotNumber'] as num?)?.toInt() == slotNumber;
+        if (!isThisSlot) {
+          throw const AttendanceApiException(
+            'Ô lịch vừa được một slot khác chiếm. Hãy chọn ô trống.',
+          );
+        }
+      }
+
+      if (sourceLockSnapshot?.exists == true) {
+        final sourceLock = sourceLockSnapshot!.data()!;
+        final belongsToThisSlot =
+            sourceLock['ownerUid'] == uid &&
+            sourceLock['courseClassId'] == courseClassId &&
+            (sourceLock['slotNumber'] as num?)?.toInt() == slotNumber;
+        if (!belongsToThisSlot) {
+          throw const AttendanceApiException(
+            'Lịch nguồn đang bị khóa bởi một slot khác. Hãy làm mới lịch.',
+          );
+        }
+      }
+
+      schedule[sourceIndex] = {
+        ...source,
+        'date': targetDateKey,
+        'daySlot': targetDaySlot,
+      };
+      transaction.update(courseReference, {
+        'schedule': schedule,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': uid,
+      });
+
+      if (sourceLockSnapshot?.exists == true) {
+        transaction.delete(sourceLockReference!);
+      }
+      if (!targetLockSnapshot.exists) {
+        transaction.set(targetLockReference, {
+          'ownerUid': uid,
+          'date': targetDateKey,
+          'daySlot': targetDaySlot,
+          'courseClassId': courseClassId,
+          'subject': courseData['subject'],
+          'classCode': courseData['classCode'],
+          'slotNumber': slotNumber,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+    });
+  });
+
   Future<AttendanceSession?> getActiveAttendance() => _guard(() async {
     final uid = _teacherUid();
     final activeReference = _firestore

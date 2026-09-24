@@ -387,7 +387,13 @@ service cloud.firestore {
     // Task 1.2: teacherScheduleLocks – prevent giảng viên chiếm cùng slot.
     // Lock ID: {ownerUid}_{date}_{daySlot}. Chỉ owner mới được tạo/xóa lock của mình.
     match /teacherScheduleLocks/{lockId} {
-      allow read: if isTeacher()
+      // Teachers must be able to check an unoccupied deterministic lock ID.
+      allow get: if isTeacher()
+        && (
+          !exists(/databases/$(database)/documents/teacherScheduleLocks/$(lockId))
+          || resource.data.ownerUid == request.auth.uid
+        );
+      allow list: if isTeacher()
         && resource.data.ownerUid == request.auth.uid;
       allow create: if isTeacher()
         && request.resource.data.ownerUid == request.auth.uid

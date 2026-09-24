@@ -12,9 +12,14 @@ import '../services/attendance_api.dart';
 import 'session_screen.dart';
 
 class ClassOverviewScreen extends StatefulWidget {
-  const ClassOverviewScreen({super.key, required this.api});
+  const ClassOverviewScreen({
+    super.key,
+    required this.api,
+    this.onOpenSchedule,
+  });
 
   final AttendanceApi api;
+  final VoidCallback? onOpenSchedule;
 
   @override
   State<ClassOverviewScreen> createState() => _ClassOverviewScreenState();
@@ -457,6 +462,14 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                 ),
               ),
               const SizedBox(width: 10),
+              if (widget.onOpenSchedule != null) ...[
+                FilledButton.tonalIcon(
+                  onPressed: widget.onOpenSchedule,
+                  icon: const Icon(Icons.drag_indicator),
+                  label: const Text('Điều chỉnh lịch'),
+                ),
+                const SizedBox(width: 8),
+              ],
               IconButton.filledTonal(
                 tooltip: 'Đồng bộ Google Sheets và làm mới dữ liệu',
                 onPressed: _selectedClass == null ? null : _refreshAndSync,
