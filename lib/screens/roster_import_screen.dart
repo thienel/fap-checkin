@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import '../domain/models.dart';
 import '../domain/roster_import.dart';
 import '../services/attendance_api.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 
 class RosterImportScreen extends StatefulWidget {
   const RosterImportScreen({super.key, required this.api});
@@ -131,20 +133,16 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
   Widget build(BuildContext context) {
     final validCount = _rows.where((row) => row.isValid).length;
     return Padding(
-      padding: const EdgeInsets.all(36),
+      padding: const EdgeInsets.all(AppSpace.xl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Danh sách sinh viên',
-            style: Theme.of(context).textTheme.headlineMedium
-                ?.copyWith(fontWeight: FontWeight.w700),
+          const AppPageHeader(
+            title: 'Danh sách sinh viên',
+            subtitle:
+                'Chọn tệp CSV hoặc XLSX, kiểm tra dữ liệu rồi nhập vào lớp.',
           ),
-          const SizedBox(height: 4),
-          const Text(
-            'Import CSV/XLSX, xem trước lỗi dữ liệu rồi ghi roster vào Firestore.',
-          ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpace.xl),
           Wrap(
             spacing: 16,
             runSpacing: 12,
@@ -214,26 +212,32 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            Row(
+            Wrap(
+              spacing: AppSpace.lg,
+              runSpacing: AppSpace.md,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                _CountChip(
-                  label: 'Tổng',
-                  value: _rows.length,
-                  color: const Color(0xFF245F82),
+                Wrap(
+                  spacing: AppSpace.sm,
+                  children: [
+                    _CountChip(
+                      label: 'Tổng',
+                      value: _rows.length,
+                      tone: AppTone.info,
+                    ),
+                    _CountChip(
+                      label: 'Hợp lệ',
+                      value: validCount,
+                      tone: AppTone.success,
+                    ),
+                    _CountChip(
+                      label: 'Lỗi',
+                      value: _rows.length - validCount,
+                      tone: AppTone.error,
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 10),
-                _CountChip(
-                  label: 'Hợp lệ',
-                  value: validCount,
-                  color: const Color(0xFF167052),
-                ),
-                const SizedBox(width: 10),
-                _CountChip(
-                  label: 'Lỗi',
-                  value: _rows.length - validCount,
-                  color: const Color(0xFFB5473C),
-                ),
-                const Spacer(),
                 FilledButton.icon(
                   onPressed: _importing || _selectedClass == null
                       ? null
@@ -251,10 +255,10 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
             Expanded(child: _previewTable()),
           ] else
             const Expanded(
-              child: Center(
-                child: Text(
-                  'Chọn file theo template: email, mã sinh viên, họ tên.',
-                ),
+              child: AppEmptyState(
+                icon: Icons.upload_file_outlined,
+                title: 'Chưa chọn tệp danh sách',
+                description: 'Tệp cần có email, mã sinh viên và họ tên.',
               ),
             ),
         ],
@@ -281,8 +285,8 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: SingleChildScrollView(
-        child: SizedBox(
-          width: double.infinity,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
           child: DataTable(
             columns: const [
               DataColumn(label: Text('Dòng')),
@@ -296,14 +300,29 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                 DataRow(
                   color: row.isValid
                       ? null
-                      : WidgetStateProperty.all(const Color(0xFFFFEEEE)),
+                      : const WidgetStatePropertyAll(AppColors.errorSurface),
                   cells: [
                     DataCell(Text('${row.rowNumber}')),
                     DataCell(Text(row.email)),
                     DataCell(Text(row.studentCode)),
                     DataCell(Text(row.fullName)),
                     DataCell(
-                      Text(row.isValid ? 'Hợp lệ' : row.errors.join('; ')),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            row.isValid
+                                ? Icons.check_circle_outline
+                                : Icons.error_outline,
+                            size: 16,
+                            color: row.isValid
+                                ? AppColors.success
+                                : AppColors.error,
+                          ),
+                          const SizedBox(width: AppSpace.sm),
+                          Text(row.isValid ? 'Hợp lệ' : row.errors.join('; ')),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -319,17 +338,19 @@ class _CountChip extends StatelessWidget {
   const _CountChip({
     required this.label,
     required this.value,
-    required this.color,
+    required this.tone,
   });
 
   final String label;
   final int value;
-  final Color color;
+  final AppTone tone;
 
   @override
   Widget build(BuildContext context) => Chip(
+    backgroundColor: tone.background,
+    side: BorderSide(color: tone.foreground.withValues(alpha: 0.2)),
     avatar: CircleAvatar(
-      backgroundColor: color,
+      backgroundColor: tone.foreground,
       child: Text(
         '$value',
         style: const TextStyle(color: Colors.white, fontSize: 11),

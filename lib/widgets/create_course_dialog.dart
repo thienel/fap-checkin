@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../domain/schedule.dart';
 import '../services/attendance_api.dart';
+import 'app_ui.dart';
 
 class CreateCourseDialog extends StatefulWidget {
   const CreateCourseDialog({super.key, required this.api});
@@ -76,117 +77,109 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
     final preview = generateSchedule(startDate: _startDate, preset: _preset);
     return AlertDialog(
       title: const Text('Tạo môn–lớp'),
-      content: SizedBox(
-        width: 520,
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _subjectController,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(
-                        labelText: 'Mã môn học',
-                      ),
-                      validator: _validateCode,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _classController,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(labelText: 'Mã lớp'),
-                      validator: _validateCode,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: InkWell(
-                      onTap: _pickDate,
-                      borderRadius: BorderRadius.circular(4),
-                      child: InputDecorator(
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _subjectController,
+                        textCapitalization: TextCapitalization.characters,
                         decoration: const InputDecoration(
-                          labelText: 'Ngày bắt đầu',
-                          suffixIcon: Icon(Icons.calendar_month_outlined),
+                          labelText: 'Mã môn học',
                         ),
-                        child: Text(
-                          DateFormat('dd/MM/yyyy').format(_startDate),
+                        validator: _validateCode,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _classController,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: const InputDecoration(labelText: 'Mã lớp'),
+                        validator: _validateCode,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: _pickDate,
+                        borderRadius: BorderRadius.circular(4),
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Ngày bắt đầu',
+                            suffixIcon: Icon(Icons.calendar_month_outlined),
+                          ),
+                          child: Text(
+                            DateFormat('dd/MM/yyyy').format(_startDate),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonFormField<SchedulePreset>(
-                      initialValue: _preset,
-                      decoration: const InputDecoration(labelText: 'Cấu hình'),
-                      items: SchedulePreset.values
-                          .map(
-                            (preset) => DropdownMenuItem(
-                              value: preset,
-                              child: Text(preset.label),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) => setState(() => _preset = value!),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButtonFormField<SchedulePreset>(
+                        initialValue: _preset,
+                        decoration: const InputDecoration(
+                          labelText: 'Cấu hình',
+                        ),
+                        items: SchedulePreset.values
+                            .map(
+                              (preset) => DropdownMenuItem(
+                                value: preset,
+                                child: Text(preset.label),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) => setState(() => _preset = value!),
+                      ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  initialValue: _daySlot,
+                  decoration: const InputDecoration(
+                    labelText: 'Slot trong ngày',
+                    helperText: 'Khác với số thứ tự buổi của môn học (buổi 1/10, 2/10…)',
+                  ),
+                  items: daySlotDefinitions
+                      .map(
+                        (slot) => DropdownMenuItem(
+                          value: slot.number,
+                          child: Text(slot.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setState(() => _daySlot = value!),
+                ),
+                const SizedBox(height: 16),
+                AppNotice(
+                  message:
+                      'Lịch dự kiến: ${DateFormat('dd/MM').format(preview.first.date)} – '
+                      '${DateFormat('dd/MM/yyyy').format(preview.last.date)} · '
+                      '${preview.length} buổi môn học · Slot $_daySlot trong ngày · bỏ Chủ nhật',
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  AppNotice(
+                    message: _error!,
+                    tone: AppTone.error,
+                    icon: Icons.error_outline,
                   ),
                 ],
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<int>(
-                initialValue: _daySlot,
-                decoration: const InputDecoration(
-                  labelText: 'Slot trong ngày',
-                  helperText:
-                      'Khác với số thứ tự buổi của môn học (buổi 1/10, 2/10…)',
-                ),
-                items: daySlotDefinitions
-                    .map(
-                      (slot) => DropdownMenuItem(
-                        value: slot.number,
-                        child: Text(slot.label),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) => setState(() => _daySlot = value!),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF0F7F8),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  'Lịch dự kiến: ${DateFormat('dd/MM').format(preview.first.date)} – '
-                  '${DateFormat('dd/MM/yyyy').format(preview.last.date)} · '
-                  '${preview.length} buổi môn học · Slot $_daySlot trong ngày · bỏ Chủ nhật',
-                ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                ),
               ],
-            ],
+            ),
           ),
         ),
       ),

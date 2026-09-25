@@ -9,6 +9,8 @@ import 'package:intl/intl.dart';
 import '../domain/class_overview.dart';
 import '../domain/models.dart';
 import '../services/attendance_api.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 import 'session_screen.dart';
 
 class ClassOverviewScreen extends StatefulWidget {
@@ -315,103 +317,111 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
     }).toList();
   }
 
-  Future<({String email, String studentCode, String fullName})?>
-  _studentEditor(CourseStudent? student) async {
+  Future<({String email, String studentCode, String fullName})?> _studentEditor(
+    CourseStudent? student,
+  ) async {
     final emailController = TextEditingController(text: student?.email ?? '');
     final codeController = TextEditingController(
       text: student?.studentCode ?? '',
     );
-    final nameController = TextEditingController(
-      text: student?.fullName ?? '',
-    );
+    final nameController = TextEditingController(text: student?.fullName ?? '');
     final formKey = GlobalKey<FormState>();
-    final result = await showDialog<
-      ({String email, String studentCode, String fullName})
-    >(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(student == null ? 'Thêm sinh viên' : 'Sửa thông tin sinh viên'),
-        content: SizedBox(
-          width: 440,
-          child: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: emailController,
-                  readOnly: student != null,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: InputDecoration(
-                    labelText: 'Email đăng nhập',
-                    helperText: student == null
-                        ? 'Dùng email này để sinh viên đăng nhập điểm danh.'
-                        : 'Email tạo định danh và lịch sử điểm danh nên không thể đổi.',
-                  ),
-                  validator: (value) {
-                    final email = value?.trim().toLowerCase() ?? '';
-                    return RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)
-                        ? null
-                        : 'Email không hợp lệ.';
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: codeController,
-                  textCapitalization: TextCapitalization.characters,
-                  maxLength: 20,
-                  decoration: const InputDecoration(labelText: 'Mã sinh viên'),
-                  validator: (value) {
-                    final code = value?.trim().toUpperCase() ?? '';
-                    return RegExp(r'^[A-Z0-9_-]{3,20}$').hasMatch(code)
-                        ? null
-                        : 'Mã gồm 3–20 ký tự A–Z, 0–9, _ hoặc -.';
-                  },
-                ),
-                const SizedBox(height: 4),
-                TextFormField(
-                  controller: nameController,
-                  maxLength: 120,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(labelText: 'Họ và tên'),
-                  validator: (value) {
-                    final name = value?.trim() ?? '';
-                    if (name.isEmpty) return 'Hãy nhập họ và tên.';
-                    if (name.length > 120) return 'Họ tên tối đa 120 ký tự.';
-                    return null;
-                  },
-                ),
-              ],
+    final result =
+        await showDialog<({String email, String studentCode, String fullName})>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(
+              student == null ? 'Thêm sinh viên' : 'Sửa thông tin sinh viên',
             ),
+            content: SizedBox(
+              width: 440,
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: emailController,
+                      readOnly: student != null,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: InputDecoration(
+                        labelText: 'Email đăng nhập',
+                        helperText: student == null
+                            ? 'Dùng email này để sinh viên đăng nhập điểm danh.'
+                            : 'Email tạo định danh và lịch sử điểm danh nên không thể đổi.',
+                      ),
+                      validator: (value) {
+                        final email = value?.trim().toLowerCase() ?? '';
+                        return RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+                                .hasMatch(email)
+                            ? null
+                            : 'Email không hợp lệ.';
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: codeController,
+                      textCapitalization: TextCapitalization.characters,
+                      maxLength: 20,
+                      decoration: const InputDecoration(
+                        labelText: 'Mã sinh viên',
+                      ),
+                      validator: (value) {
+                        final code = value?.trim().toUpperCase() ?? '';
+                        return RegExp(r'^[A-Z0-9_-]{3,20}$').hasMatch(code)
+                            ? null
+                            : 'Mã gồm 3–20 ký tự A–Z, 0–9, _ hoặc -.';
+                      },
+                    ),
+                    const SizedBox(height: 4),
+                    TextFormField(
+                      controller: nameController,
+                      maxLength: 120,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(labelText: 'Họ và tên'),
+                      validator: (value) {
+                        final name = value?.trim() ?? '';
+                        if (name.isEmpty) return 'Hãy nhập họ và tên.';
+                        if (name.length > 120) {
+                          return 'Họ tên tối đa 120 ký tự.';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Hủy'),
+              ),
+              FilledButton.icon(
+                onPressed: () {
+                  if (!formKey.currentState!.validate()) return;
+                  Navigator.pop(dialogContext, (
+                    email: emailController.text.trim(),
+                    studentCode: codeController.text.trim(),
+                    fullName: nameController.text.trim(),
+                  ));
+                },
+                icon: const Icon(Icons.save_outlined),
+                label: const Text('Lưu'),
+              ),
+            ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Hủy'),
-          ),
-          FilledButton.icon(
-            onPressed: () {
-              if (!formKey.currentState!.validate()) return;
-              Navigator.pop(dialogContext, (
-                email: emailController.text.trim(),
-                studentCode: codeController.text.trim(),
-                fullName: nameController.text.trim(),
-              ));
-            },
-            icon: const Icon(Icons.save_outlined),
-            label: const Text('Lưu'),
-          ),
-        ],
-      ),
-    );
+        );
     emailController.dispose();
     codeController.dispose();
     nameController.dispose();
     return result;
   }
 
-  Future<void> _saveStudent(CourseOverview overview, {CourseStudent? student}) async {
+  Future<void> _saveStudent(
+    CourseOverview overview, {
+    CourseStudent? student,
+  }) async {
     final profile = await _studentEditor(student);
     if (profile == null) return;
     try {
@@ -434,7 +444,11 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
       _refresh();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(student == null ? 'Đã thêm sinh viên vào lớp.' : 'Đã cập nhật hồ sơ sinh viên.'),
+          content: Text(
+            student == null
+                ? 'Đã thêm sinh viên vào lớp.'
+                : 'Đã cập nhật hồ sơ sinh viên.',
+          ),
         ),
       );
     } catch (error) {
@@ -601,28 +615,14 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.all(36),
+      padding: const EdgeInsets.all(AppSpace.xl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Tổng quan lớp học',
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Theo dõi slots, sinh viên, tỷ lệ tham dự và phiên đang điểm danh.',
-                    ),
-                  ],
-                ),
-              ),
+          AppPageHeader(
+            title: 'Tổng quan lớp học',
+            subtitle: 'Theo dõi buổi học, chuyên cần và phiên điểm danh.',
+            actions: [
               SizedBox(
                 width: 310,
                 child: FutureBuilder<List<CourseClassSummary>>(
@@ -661,10 +661,14 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpace.xl),
           Expanded(
             child: _overview == null
-                ? const _OverviewEmpty()
+                ? const AppEmptyState(
+                    icon: Icons.analytics_outlined,
+                    title: 'Chọn một môn–lớp',
+                    description: 'Xem thống kê và chỉnh sửa điểm danh của lớp.',
+                  )
                 : FutureBuilder<CourseOverview>(
                     future: _overview,
                     builder: (context, snapshot) {
@@ -672,9 +676,14 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                         return const Center(child: CircularProgressIndicator());
                       }
                       if (snapshot.hasError) {
-                        return Center(
-                          child: Text(
-                            'Không tải được tổng quan: ${snapshot.error}',
+                        return AppEmptyState(
+                          icon: Icons.cloud_off_outlined,
+                          title: 'Không tải được tổng quan',
+                          description: '${snapshot.error}',
+                          action: TextButton.icon(
+                            onPressed: _refresh,
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Thử lại'),
                           ),
                         );
                       }
@@ -693,135 +702,151 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
     return Column(
       children: [
         if (overview.activeSlot != null) ...[
-          _ActiveSlotBanner(
-            slot: overview.activeSlot!,
-            onOpen: () => _openActiveSession(overview),
+          AppNotice(
+            tone: AppTone.success,
+            icon: Icons.radio_button_checked,
+            message:
+                'Đang điểm danh buổi ${overview.activeSlot!.number} · '
+                '${overview.activeSlot!.date}',
+            action: TextButton.icon(
+              onPressed: () => _openActiveSession(overview),
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('Mở phiên'),
+            ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: AppSpace.md),
         ],
-        Row(
-          children: [
-            Expanded(
-              child: _MetricCard(
-                label: 'Sĩ số',
-                value: '${overview.activeStudentCount}',
-                icon: Icons.groups_outlined,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _MetricCard(
-                label: 'Slots đã mở',
-                value: '${overview.openedSlotCount}/${overview.slots.length}',
-                icon: Icons.event_available_outlined,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _MetricCard(
-                label: 'Tỷ lệ tham dự',
-                value: '${(overview.attendanceRate * 100).toStringAsFixed(1)}%',
-                icon: Icons.trending_up,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _MetricCard(
-                label: 'Cần chú ý',
-                value:
-                    '${overview.atRiskStudentCount + overview.syncErrorCount}',
-                icon: Icons.warning_amber_rounded,
-                warning:
-                    overview.atRiskStudentCount + overview.syncErrorCount > 0,
-              ),
-            ),
-          ],
-        ),
-        if (absenceAlertStudentCount > 0) ...[
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF4D6),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE6C36A)),
-            ),
-            child: Row(
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 1050
+                ? 4
+                : constraints.maxWidth >= 520
+                ? 2
+                : 1;
+            final width =
+                (constraints.maxWidth - (columns - 1) * AppSpace.md) / columns;
+            return Wrap(
+              spacing: AppSpace.md,
+              runSpacing: AppSpace.md,
               children: [
-                const Icon(
-                  Icons.warning_amber_rounded,
-                  color: Color(0xFF9B6A00),
+                SizedBox(
+                  width: width,
+                  child: AppMetricTile(
+                    label: 'Sĩ số',
+                    value: '${overview.activeStudentCount}',
+                    icon: Icons.groups_outlined,
+                  ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '$absenceAlertStudentCount sinh viên đã vắng không phép '
-                    'từ 10% tổng số buổi trong kế hoạch. '
-                    '${overview.examRiskStudentCount} sinh viên vượt 20% '
-                    '(ngưỡng cấm thi).',
-                    style: const TextStyle(color: Color(0xFF704D00)),
+                SizedBox(
+                  width: width,
+                  child: AppMetricTile(
+                    label: 'Buổi đã mở',
+                    value:
+                        '${overview.openedSlotCount}/${overview.slots.length}',
+                    icon: Icons.event_available_outlined,
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: AppMetricTile(
+                    label: 'Tỷ lệ tham dự',
+                    value:
+                        '${(overview.attendanceRate * 100).toStringAsFixed(1)}%',
+                    icon: Icons.trending_up,
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: AppMetricTile(
+                    label: 'Cần chú ý',
+                    value:
+                        '${overview.atRiskStudentCount + overview.syncErrorCount}',
+                    icon: Icons.warning_amber_rounded,
+                    tone:
+                        overview.atRiskStudentCount + overview.syncErrorCount >
+                            0
+                        ? AppTone.warning
+                        : AppTone.info,
                   ),
                 ),
               ],
-            ),
+            );
+          },
+        ),
+        if (absenceAlertStudentCount > 0) ...[
+          const SizedBox(height: AppSpace.md),
+          AppNotice(
+            tone: AppTone.warning,
+            icon: Icons.warning_amber_rounded,
+            message:
+                '$absenceAlertStudentCount sinh viên đã vắng không phép '
+                'từ 10% tổng số buổi trong kế hoạch. '
+                '${overview.examRiskStudentCount} sinh viên vượt 20% '
+                '(ngưỡng cấm thi).',
           ),
         ],
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _searchController,
-                onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Tìm tên, email hoặc mã sinh viên',
+        const SizedBox(height: AppSpace.lg),
+        LayoutBuilder(
+          builder: (context, constraints) => Wrap(
+            spacing: AppSpace.md,
+            runSpacing: AppSpace.sm,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: constraints.maxWidth >= 960
+                    ? constraints.maxWidth - 640
+                    : constraints.maxWidth,
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Tìm tên, email hoặc mã sinh viên',
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 190,
-              child: DropdownButtonFormField<AttendanceStatus?>(
-                initialValue: _statusFilter,
-                decoration: const InputDecoration(
-                  labelText: 'Lọc trạng thái',
-                  isDense: true,
+              SizedBox(
+                width: 190,
+                child: DropdownButtonFormField<AttendanceStatus?>(
+                  initialValue: _statusFilter,
+                  decoration: const InputDecoration(
+                    labelText: 'Lọc trạng thái',
+                    isDense: true,
+                  ),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('Tất cả')),
+                    for (final status in AttendanceStatus.values)
+                      DropdownMenuItem(
+                        value: status,
+                        child: Text(_statusLabel(status)),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => _statusFilter = value),
                 ),
-                items: [
-                  const DropdownMenuItem(value: null, child: Text('Tất cả')),
-                  for (final status in AttendanceStatus.values)
-                    DropdownMenuItem(
-                      value: status,
-                      child: Text(_statusLabel(status)),
-                    ),
-                ],
-                onChanged: (value) => setState(() => _statusFilter = value),
               ),
-            ),
-            const SizedBox(width: 12),
-            FilledButton.tonalIcon(
-              onPressed: () => _exportMatrix(overview),
-              icon: const Icon(Icons.download_outlined),
-              label: const Text('Xuất ma trận CSV'),
-            ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              onPressed: () => _saveStudent(overview),
-              icon: const Icon(Icons.person_add_alt_1),
-              label: const Text('Thêm sinh viên'),
-            ),
-          ],
+              FilledButton.tonalIcon(
+                onPressed: () => _exportMatrix(overview),
+                icon: const Icon(Icons.download_outlined),
+                label: const Text('Xuất ma trận CSV'),
+              ),
+              FilledButton.icon(
+                onPressed: () => _saveStudent(overview),
+                icon: const Icon(Icons.person_add_alt_1),
+                label: const Text('Thêm sinh viên'),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: AppSpace.md),
         Expanded(
           child: Card(
             clipBehavior: Clip.antiAlias,
             child: students.isEmpty
-                ? const Center(
-                    child: Text('Không có sinh viên phù hợp bộ lọc.'),
+                ? const AppEmptyState(
+                    icon: Icons.filter_alt_off_outlined,
+                    title: 'Không tìm thấy sinh viên',
+                    description: 'Thử từ khóa hoặc trạng thái khác.',
                   )
                 : Scrollbar(
                     controller: _matrixVerticalController,
@@ -831,9 +856,6 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                       child: SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: DataTable(
-                          headingRowColor: WidgetStateProperty.all(
-                            const Color(0xFFEAF1F3),
-                          ),
                           columns: [
                             const DataColumn(label: Text('Sinh viên')),
                             const DataColumn(label: Text('Tham dự')),
@@ -929,7 +951,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                                   ? Icons.policy
                                                   : Icons.policy_outlined,
                                               color: student.isAlwaysExcused
-                                                  ? const Color(0xFF7C5CBF)
+                                                  ? AppColors.info
                                                   : null,
                                               size: 19,
                                             ),
@@ -961,17 +983,22 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                               : Icons.pause_circle_outline,
                                           size: 18,
                                           color: student.active
-                                              ? const Color(0xFF167052)
-                                              : const Color(0xFF777777),
+                                              ? AppColors.success
+                                              : AppColors.textMuted,
                                         ),
                                         const SizedBox(width: 6),
-                                        Text(student.active ? 'Đang học' : 'Đã ngừng'),
+                                        Text(
+                                          student.active
+                                              ? 'Đang học'
+                                              : 'Đã ngừng',
+                                        ),
                                       ],
                                     ),
                                   ),
                                   for (final slot in overview.slots)
                                     DataCell(
-                                      _StatusBadge(
+                                      AppAttendanceBadge(
+                                        iconOnly: true,
                                         status: overview.statusFor(
                                           student.id,
                                           slot,
@@ -1042,7 +1069,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
               const SizedBox(height: 14),
               for (final slot in overview.slots)
                 ListTile(
-                  leading: _StatusBadge(
+                  leading: AppAttendanceBadge(
+                    iconOnly: true,
                     status: overview.statusFor(student.id, slot),
                   ),
                   title: Text('Buổi ${slot.number} · ${slot.date}'),
@@ -1107,7 +1135,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                   children: [
                     for (final student in overview.students)
                       ListTile(
-                        leading: _StatusBadge(
+                        leading: AppAttendanceBadge(
+                          iconOnly: true,
                           status: overview.statusFor(student.id, slot),
                           source: overview
                               .entryFor(student.id, slot.number)
@@ -1166,49 +1195,6 @@ String _statusLabel(AttendanceStatus status) => switch (status) {
   AttendanceStatus.notYetOpen => 'Chưa mở',
 };
 
-class _StatusBadge extends StatelessWidget {
-  const _StatusBadge({required this.status, this.source});
-  final AttendanceStatus status;
-  final String? source;
-
-  @override
-  Widget build(BuildContext context) {
-    final (icon, color) = switch (status) {
-      AttendanceStatus.present => (Icons.check_circle, const Color(0xFF167052)),
-      AttendanceStatus.absent => (Icons.cancel, const Color(0xFFB5473C)),
-      AttendanceStatus.excused => (Icons.event_busy, const Color(0xFF7C5CBF)),
-      AttendanceStatus.notYetOpen => (Icons.schedule, const Color(0xFF7B898D)),
-    };
-    final sourceLabel = switch (source) {
-      'teacher' => 'Giảng viên chỉnh tay',
-      'policy' => 'Miễn theo chính sách',
-      'qr' => 'QR',
-      _ => null,
-    };
-    return Tooltip(
-      message: sourceLabel == null
-          ? _statusLabel(status)
-          : '${_statusLabel(status)} · $sourceLabel',
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Icon(icon, color: color, size: 22),
-          if (source == 'teacher' || source == 'policy')
-            Positioned(
-              right: -7,
-              bottom: -5,
-              child: Icon(
-                source == 'teacher' ? Icons.edit : Icons.policy,
-                size: 11,
-                color: color,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 class _AbsenceIndicator extends StatelessWidget {
   const _AbsenceIndicator({required this.overview, required this.student});
 
@@ -1224,9 +1210,9 @@ class _AbsenceIndicator extends StatelessWidget {
         ? '—'
         : '${(overview.absenceRate(student) * 100).toStringAsFixed(1)}%';
     final color = switch (risk) {
-      AbsenceRiskLevel.warning => const Color(0xFF9B6A00),
-      AbsenceRiskLevel.examRisk => const Color(0xFFB42318),
-      AbsenceRiskLevel.none => const Color(0xFF506067),
+      AbsenceRiskLevel.warning => AppColors.warning,
+      AbsenceRiskLevel.examRisk => AppColors.error,
+      AbsenceRiskLevel.none => AppColors.textMuted,
     };
     final tooltip = switch (risk) {
       AbsenceRiskLevel.warning =>
@@ -1259,104 +1245,4 @@ class _AbsenceIndicator extends StatelessWidget {
       ),
     );
   }
-}
-
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    this.warning = false,
-  });
-  final String label;
-  final String value;
-  final IconData icon;
-  final bool warning;
-
-  @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(18),
-      child: Row(
-        children: [
-          CircleAvatar(
-            backgroundColor: warning
-                ? const Color(0xFFFFE9E4)
-                : const Color(0xFFE3F2F4),
-            child: Icon(
-              icon,
-              color: warning
-                  ? const Color(0xFFB5473C)
-                  : const Color(0xFF17658C),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: const TextStyle(color: Color(0xFF64777D))),
-              Text(
-                value,
-                style: Theme.of(context).textTheme.headlineSmall
-                    ?.copyWith(fontWeight: FontWeight.w800),
-              ),
-            ],
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-class _ActiveSlotBanner extends StatelessWidget {
-  const _ActiveSlotBanner({required this.slot, required this.onOpen});
-  final CourseSlotOverview slot;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
-    decoration: BoxDecoration(
-      color: const Color(0xFFE4F4EE),
-      border: Border.all(color: const Color(0xFF94CEB8)),
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.radio_button_checked, color: Color(0xFF167052)),
-        const SizedBox(width: 12),
-        Text(
-          'Đang điểm danh buổi ${slot.number} · ${slot.date}',
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        const Spacer(),
-        FilledButton.tonalIcon(
-          onPressed: onOpen,
-          icon: const Icon(Icons.open_in_new),
-          label: const Text('Mở phiên realtime'),
-        ),
-      ],
-    ),
-  );
-}
-
-class _OverviewEmpty extends StatelessWidget {
-  const _OverviewEmpty();
-  @override
-  Widget build(BuildContext context) => const Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.analytics_outlined, size: 58, color: Color(0xFF789097)),
-        SizedBox(height: 12),
-        Text(
-          'Chọn một môn–lớp để xem tổng quan',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-        ),
-        SizedBox(height: 5),
-        Text('Dữ liệu roster, slots và điểm danh sẽ được tổng hợp tại đây.'),
-      ],
-    ),
-  );
 }
