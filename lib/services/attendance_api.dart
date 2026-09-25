@@ -14,6 +14,9 @@ import '../domain/schedule.dart';
 import '../firebase_options.dart';
 import 'apps_script_sheet_service.dart';
 
+final _studentEmailPattern = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
+final _studentCodePattern = RegExp(r'^[A-Z0-9_-]{3,20}$');
+
 class AttendanceApi {
   AttendanceApi({
     FirebaseFirestore? firestore,
@@ -349,6 +352,182 @@ class AttendanceApi {
       validRows: validRows.length,
       invalidRows: rows.length - validRows.length,
     );
+  });
+
+  Future<void> addCourseStudent({
+    required String courseClassId,
+    required String email,
+    required String studentCode,
+    required String fullName,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    final normalizedEmail = normalizeEmail(email);
+    final normalizedCode = normalizeStudentCode(studentCode);
+    final normalizedName = fullName.trim();
+    _validateCourseStudentFields(
+      email: normalizedEmail,
+      studentCode: normalizedCode,
+      fullName: normalizedName,
+    );
+
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final studentId = sha256.convert(utf8.encode(normalizedEmail)).toString();
+    final studentReference = courseReference
+        .collection('students')
+        .doc(studentId);
+    final codeClaimReference = courseReference
+        .collection('studentCodeClaims')
+        .doc(normalizedCode);
+
+    await _firestore.runTransaction((transaction) async {
+      final course = await transaction.get(courseReference);
+      final existingStudent = await transaction.get(studentReference);
+      final codeClaim = await transaction.get(codeClaimReference);
+      if (!course.exists || course.data()?['ownerUid'] != uid) {
+        throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+      }
+      if (existingStudent.exists) {
+        throw const AttendanceApiException(
+          'Email này đã có trong danh sách lớp. Hãy sửa hoặc khôi phục hồ sơ hiện có.',
+        );
+      }
+      final claimedStudentId = codeClaim.data()?['studentId'] as String?;
+      if (codeClaim.exists && claimedStudentId != studentId) {
+        throw const AttendanceApiException('Mã sinh viên đã được sử dụng trong lớp.');
+      }
+
+      transaction.set(studentReference, {
+        'email': email.trim(),
+        'emailNormalized': normalizedEmail,
+        'studentCode': normalizedCode,
+        'studentCodeNormalized': normalizedCode,
+        'fullName': normalizedName,
+        'active': true,
+        'attendancePolicy': 'normal',
+        'importedBy': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': uid,
+      });
+      transaction.set(codeClaimReference, {
+        'studentId': studentId,
+        'ownerUid': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
+  });
+
+  Future<void> updateCourseStudent({
+    required String courseClassId,
+    required String studentId,
+    required String studentCode,
+    required String fullName,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    final normalizedCode = normalizeStudentCode(studentCode);
+    final normalizedName = fullName.trim();
+    if (!_studentCodePattern.hasMatch(normalizedCode)) {
+      throw const AttendanceApiException(
+        'Mã sinh viên cần có 3–20 ký tự A–Z, 0–9, _ hoặc -.',
+      );
+    }
+    if (normalizedName.isEmpty || normalizedName.length > 120) {
+      throw const AttendanceApiException('Họ tên không được để trống và tối đa 120 ký tự.');
+    }
+
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final studentReference = courseReference
+        .collection('students')
+        .doc(studentId);
+    final claims = courseReference.collection('studentCodeClaims');
+    final newClaimReference = claims.doc(normalizedCode);
+
+    await _firestore.runTransaction((transaction) async {
+      final course = await transaction.get(courseReference);
+      final student = await transaction.get(studentReference);
+      if (!course.exists ||
+          course.data()?['ownerUid'] != uid ||
+          !student.exists ||
+          student.data() == null) {
+        throw const AttendanceApiException('Không tìm thấy sinh viên trong lớp.');
+      }
+
+      final studentData = student.data()!;
+      final oldCode = normalizeStudentCode(
+        studentData['studentCodeNormalized'] as String? ??
+            studentData['studentCode'] as String? ??
+            '',
+      );
+      final codeChanged = oldCode != normalizedCode;
+      final oldClaimReference = oldCode.isEmpty || !codeChanged
+          ? null
+          : claims.doc(oldCode);
+      final oldClaim = oldClaimReference != null
+          ? await transaction.get(oldClaimReference)
+          : null;
+      final newClaim = await transaction.get(newClaimReference);
+      final claimedStudentId = newClaim.data()?['studentId'] as String?;
+      if (newClaim.exists && claimedStudentId != studentId) {
+        throw const AttendanceApiException('Mã sinh viên đã được sử dụng trong lớp.');
+      }
+
+      transaction.update(studentReference, {
+        'studentCode': normalizedCode,
+        'studentCodeNormalized': normalizedCode,
+        'fullName': normalizedName,
+        'importedBy': studentData['importedBy'] ?? uid,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': uid,
+      });
+      if (codeChanged) {
+        if (oldClaim?.exists == true &&
+            oldClaim?.data()?['studentId'] == studentId) {
+          transaction.delete(oldClaimReference!);
+        }
+      }
+      if (!newClaim.exists) {
+        transaction.set(newClaimReference, {
+          'studentId': studentId,
+          'ownerUid': uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    });
+  });
+
+  Future<void> setCourseStudentActive({
+    required String courseClassId,
+    required String studentId,
+    required bool active,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final studentReference = courseReference
+        .collection('students')
+        .doc(studentId);
+
+    await _firestore.runTransaction((transaction) async {
+      final course = await transaction.get(courseReference);
+      final student = await transaction.get(studentReference);
+      if (!course.exists ||
+          course.data()?['ownerUid'] != uid ||
+          !student.exists ||
+          student.data() == null) {
+        throw const AttendanceApiException('Không tìm thấy sinh viên trong lớp.');
+      }
+      transaction.update(studentReference, {
+        'active': active,
+        'importedBy': student.data()?['importedBy'] ?? uid,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': uid,
+      });
+    });
   });
 
   Future<void> createCourseClass({
@@ -1578,6 +1757,26 @@ class AttendanceApi {
       }
     }
     return null;
+  }
+
+  void _validateCourseStudentFields({
+    required String email,
+    required String studentCode,
+    required String fullName,
+  }) {
+    if (!_studentEmailPattern.hasMatch(email)) {
+      throw const AttendanceApiException('Email sinh viên không hợp lệ.');
+    }
+    if (!_studentCodePattern.hasMatch(studentCode)) {
+      throw const AttendanceApiException(
+        'Mã sinh viên cần có 3–20 ký tự A–Z, 0–9, _ hoặc -.',
+      );
+    }
+    if (fullName.isEmpty || fullName.length > 120) {
+      throw const AttendanceApiException(
+        'Họ tên không được để trống và tối đa 120 ký tự.',
+      );
+    }
   }
 
   String _teacherUid() {

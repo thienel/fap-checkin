@@ -1,5 +1,7 @@
 enum AttendanceStatus { present, absent, excused, notYetOpen }
 
+enum AbsenceRiskLevel { none, warning, examRisk }
+
 enum AttendancePolicy { normal, alwaysExcused }
 
 enum CourseSlotState { notOpened, active, completed }
@@ -134,6 +136,33 @@ class CourseOverview {
 
   int excusedCount(CourseStudent student) => slots
       .where((slot) => statusFor(student.id, slot) == AttendanceStatus.excused)
+      .length;
+
+  int absentCount(CourseStudent student) => slots.where((slot) {
+    return slot.state == CourseSlotState.completed &&
+        statusFor(student.id, slot) == AttendanceStatus.absent;
+  }).length;
+
+  double absenceRate(CourseStudent student) => slots.isEmpty
+      ? 0
+      : absentCount(student) / slots.length;
+
+  AbsenceRiskLevel absenceRiskFor(CourseStudent student) {
+    if (!student.active || student.isAlwaysExcused || slots.isEmpty) {
+      return AbsenceRiskLevel.none;
+    }
+    final absences = absentCount(student);
+    if (absences * 5 > slots.length) return AbsenceRiskLevel.examRisk;
+    if (absences * 10 >= slots.length) return AbsenceRiskLevel.warning;
+    return AbsenceRiskLevel.none;
+  }
+
+  int get absenceAlertStudentCount => students
+      .where((student) => absenceRiskFor(student) != AbsenceRiskLevel.none)
+      .length;
+
+  int get examRiskStudentCount => students
+      .where((student) => absenceRiskFor(student) == AbsenceRiskLevel.examRisk)
       .length;
 
   double get attendanceRate {

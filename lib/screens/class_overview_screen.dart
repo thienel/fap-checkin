@@ -315,6 +315,190 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
     }).toList();
   }
 
+  Future<({String email, String studentCode, String fullName})?>
+  _studentEditor(CourseStudent? student) async {
+    final emailController = TextEditingController(text: student?.email ?? '');
+    final codeController = TextEditingController(
+      text: student?.studentCode ?? '',
+    );
+    final nameController = TextEditingController(
+      text: student?.fullName ?? '',
+    );
+    final formKey = GlobalKey<FormState>();
+    final result = await showDialog<
+      ({String email, String studentCode, String fullName})
+    >(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(student == null ? 'Thêm sinh viên' : 'Sửa thông tin sinh viên'),
+        content: SizedBox(
+          width: 440,
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: emailController,
+                  readOnly: student != null,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: InputDecoration(
+                    labelText: 'Email đăng nhập',
+                    helperText: student == null
+                        ? 'Dùng email này để sinh viên đăng nhập điểm danh.'
+                        : 'Email tạo định danh và lịch sử điểm danh nên không thể đổi.',
+                  ),
+                  validator: (value) {
+                    final email = value?.trim().toLowerCase() ?? '';
+                    return RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)
+                        ? null
+                        : 'Email không hợp lệ.';
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: codeController,
+                  textCapitalization: TextCapitalization.characters,
+                  maxLength: 20,
+                  decoration: const InputDecoration(labelText: 'Mã sinh viên'),
+                  validator: (value) {
+                    final code = value?.trim().toUpperCase() ?? '';
+                    return RegExp(r'^[A-Z0-9_-]{3,20}$').hasMatch(code)
+                        ? null
+                        : 'Mã gồm 3–20 ký tự A–Z, 0–9, _ hoặc -.';
+                  },
+                ),
+                const SizedBox(height: 4),
+                TextFormField(
+                  controller: nameController,
+                  maxLength: 120,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(labelText: 'Họ và tên'),
+                  validator: (value) {
+                    final name = value?.trim() ?? '';
+                    if (name.isEmpty) return 'Hãy nhập họ và tên.';
+                    if (name.length > 120) return 'Họ tên tối đa 120 ký tự.';
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Hủy'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              if (!formKey.currentState!.validate()) return;
+              Navigator.pop(dialogContext, (
+                email: emailController.text.trim(),
+                studentCode: codeController.text.trim(),
+                fullName: nameController.text.trim(),
+              ));
+            },
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+    emailController.dispose();
+    codeController.dispose();
+    nameController.dispose();
+    return result;
+  }
+
+  Future<void> _saveStudent(CourseOverview overview, {CourseStudent? student}) async {
+    final profile = await _studentEditor(student);
+    if (profile == null) return;
+    try {
+      if (student == null) {
+        await widget.api.addCourseStudent(
+          courseClassId: overview.courseClassId,
+          email: profile.email,
+          studentCode: profile.studentCode,
+          fullName: profile.fullName,
+        );
+      } else {
+        await widget.api.updateCourseStudent(
+          courseClassId: overview.courseClassId,
+          studentId: student.id,
+          studentCode: profile.studentCode,
+          fullName: profile.fullName,
+        );
+      }
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(student == null ? 'Đã thêm sinh viên vào lớp.' : 'Đã cập nhật hồ sơ sinh viên.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể lưu hồ sơ sinh viên: $error')),
+      );
+    }
+  }
+
+  Future<void> _setStudentActive(
+    CourseOverview overview,
+    CourseStudent student,
+  ) async {
+    final active = !student.active;
+    if (!active) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Xóa sinh viên khỏi lớp?'),
+          content: Text(
+            'Sinh viên ${student.displayName} sẽ không thể điểm danh trong lớp này. '
+            'Lịch sử điểm danh sẽ được giữ lại; bạn có thể khôi phục hồ sơ sau.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Xóa khỏi lớp'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    try {
+      await widget.api.setCourseStudentActive(
+        courseClassId: overview.courseClassId,
+        studentId: student.id,
+        active: active,
+      );
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            active
+                ? 'Đã khôi phục sinh viên vào lớp.'
+                : 'Đã xóa sinh viên khỏi lớp; lịch sử điểm danh được giữ lại.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không thể cập nhật sinh viên: $error')),
+      );
+    }
+  }
+
   Future<void> _exportMatrix(CourseOverview overview) async {
     final rows = <List<dynamic>>[
       [
@@ -505,6 +689,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
 
   Widget _buildOverview(CourseOverview overview) {
     final students = _filteredStudents(overview);
+    final absenceAlertStudentCount = overview.absenceAlertStudentCount;
     return Column(
       children: [
         if (overview.activeSlot != null) ...[
@@ -552,6 +737,36 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
             ),
           ],
         ),
+        if (absenceAlertStudentCount > 0) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF4D6),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE6C36A)),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  color: Color(0xFF9B6A00),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '$absenceAlertStudentCount sinh viên đã vắng không phép '
+                    'từ 10% tổng số buổi trong kế hoạch. '
+                    '${overview.examRiskStudentCount} sinh viên vượt 20% '
+                    '(ngưỡng cấm thi).',
+                    style: const TextStyle(color: Color(0xFF704D00)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         Row(
           children: [
@@ -592,6 +807,12 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
               icon: const Icon(Icons.download_outlined),
               label: const Text('Xuất ma trận CSV'),
             ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: () => _saveStudent(overview),
+              icon: const Icon(Icons.person_add_alt_1),
+              label: const Text('Thêm sinh viên'),
+            ),
           ],
         ),
         const SizedBox(height: 12),
@@ -616,6 +837,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                           columns: [
                             const DataColumn(label: Text('Sinh viên')),
                             const DataColumn(label: Text('Tham dự')),
+                            const DataColumn(label: Text('Vắng / tổng')),
+                            const DataColumn(label: Text('Trạng thái')),
                             for (final slot in overview.slots)
                               DataColumn(
                                 label: Row(
@@ -656,6 +879,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                   ],
                                 ),
                               ),
+                            const DataColumn(label: Text('Thao tác')),
                           ],
                           rows: [
                             for (final student in students)
@@ -721,6 +945,30 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                       '${overview.attendedCount(student)}/${overview.openedSlotCount}',
                                     ),
                                   ),
+                                  DataCell(
+                                    _AbsenceIndicator(
+                                      overview: overview,
+                                      student: student,
+                                    ),
+                                  ),
+                                  DataCell(
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          student.active
+                                              ? Icons.check_circle_outline
+                                              : Icons.pause_circle_outline,
+                                          size: 18,
+                                          color: student.active
+                                              ? const Color(0xFF167052)
+                                              : const Color(0xFF777777),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(student.active ? 'Đang học' : 'Đã ngừng'),
+                                      ],
+                                    ),
+                                  ),
                                   for (final slot in overview.slots)
                                     DataCell(
                                       _StatusBadge(
@@ -738,6 +986,35 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                         slot,
                                       ),
                                     ),
+                                  DataCell(
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          tooltip: 'Sửa thông tin sinh viên',
+                                          onPressed: () => _saveStudent(
+                                            overview,
+                                            student: student,
+                                          ),
+                                          icon: const Icon(Icons.edit_outlined),
+                                        ),
+                                        IconButton(
+                                          tooltip: student.active
+                                              ? 'Xóa khỏi lớp'
+                                              : 'Khôi phục vào lớp',
+                                          onPressed: () => _setStudentActive(
+                                            overview,
+                                            student,
+                                          ),
+                                          icon: Icon(
+                                            student.active
+                                                ? Icons.person_remove_outlined
+                                                : Icons.person_add_alt_1,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ],
                               ),
                           ],
@@ -926,6 +1203,58 @@ class _StatusBadge extends StatelessWidget {
                 color: color,
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AbsenceIndicator extends StatelessWidget {
+  const _AbsenceIndicator({required this.overview, required this.student});
+
+  final CourseOverview overview;
+  final CourseStudent student;
+
+  @override
+  Widget build(BuildContext context) {
+    final absent = overview.absentCount(student);
+    final total = overview.slots.length;
+    final risk = overview.absenceRiskFor(student);
+    final percentage = total == 0
+        ? '—'
+        : '${(overview.absenceRate(student) * 100).toStringAsFixed(1)}%';
+    final color = switch (risk) {
+      AbsenceRiskLevel.warning => const Color(0xFF9B6A00),
+      AbsenceRiskLevel.examRisk => const Color(0xFFB42318),
+      AbsenceRiskLevel.none => const Color(0xFF506067),
+    };
+    final tooltip = switch (risk) {
+      AbsenceRiskLevel.warning =>
+        'Đã vắng không phép từ 10% tổng số buổi trong kế hoạch.',
+      AbsenceRiskLevel.examRisk =>
+        'Đã vượt 20% tổng số buổi, thuộc diện cấm thi.',
+      AbsenceRiskLevel.none =>
+        'Số buổi vắng không phép trên tổng số buổi trong kế hoạch.',
+    };
+
+    return Tooltip(
+      message: tooltip,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$absent/$total · $percentage',
+            style: TextStyle(
+              color: color,
+              fontWeight: risk == AbsenceRiskLevel.none
+                  ? FontWeight.normal
+                  : FontWeight.w700,
+            ),
+          ),
+          if (risk != AbsenceRiskLevel.none) ...[
+            const SizedBox(width: 5),
+            Icon(Icons.warning_amber_rounded, size: 17, color: color),
+          ],
         ],
       ),
     );
