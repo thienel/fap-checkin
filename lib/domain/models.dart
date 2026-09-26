@@ -85,10 +85,7 @@ class AttendanceSession {
 }
 
 class RotatedCheckoutCode {
-  const RotatedCheckoutCode({
-    required this.code,
-    required this.issuedAt,
-  });
+  const RotatedCheckoutCode({required this.code, required this.issuedAt});
 
   final String code;
   final DateTime issuedAt;
@@ -137,13 +134,16 @@ class CourseClassSummary {
     required this.id,
     required this.subject,
     required this.classCode,
+    this.academicTerm,
   });
 
   final String id;
   final String subject;
   final String classCode;
+  final String? academicTerm;
 
-  String get label => '$subject · $classCode';
+  String get label =>
+      '$subject · $classCode${academicTerm == null ? '' : ' · $academicTerm'}';
 }
 
 class RosterImportResult {

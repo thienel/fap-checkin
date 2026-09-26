@@ -14,6 +14,7 @@ class AppsScriptSheetService {
   final http.Client _client;
   final String _url;
   final String _secret;
+  bool _instanceSheetsSupported = false;
 
   bool get isConfigured => _url.isNotEmpty && _secret.isNotEmpty;
 
@@ -22,6 +23,7 @@ class AppsScriptSheetService {
     required int revision,
     required String subject,
     required String classCode,
+    String? courseClassId,
     required int slot,
     required String date,
     required String email,
@@ -31,12 +33,14 @@ class AppsScriptSheetService {
     required String recordSource,
     String? reason,
   }) async {
+    await _requireInstanceSheets(courseClassId, subject, classCode);
     final payload = <String, Object>{
       'action': 'upsert',
       'recordId': recordId,
       'revision': revision,
       'subject': subject,
       'classCode': classCode,
+      ...?(courseClassId == null ? null : {'courseClassId': courseClassId}),
       'slot': slot,
       'date': date,
       'email': email,
@@ -59,8 +63,40 @@ class AppsScriptSheetService {
   Future<void> sort({
     required String subject,
     required String classCode,
+    String? courseClassId,
   }) async {
-    await _post({'action': 'sort', 'subject': subject, 'classCode': classCode});
+    await _requireInstanceSheets(courseClassId, subject, classCode);
+    await _post({
+      'action': 'sort',
+      'subject': subject,
+      'classCode': classCode,
+      ...?(courseClassId == null ? null : {'courseClassId': courseClassId}),
+    });
+  }
+
+  Future<void> _requireInstanceSheets(
+    String? courseClassId,
+    String subject,
+    String classCode,
+  ) async {
+    if (courseClassId == null ||
+        courseClassId == '${subject}_$classCode' ||
+        _instanceSheetsSupported) {
+      return;
+    }
+    try {
+      final result = await _post({'action': 'capabilities'});
+      if (result['instanceSheets'] == true) {
+        _instanceSheetsSupported = true;
+        return;
+      }
+    } on SheetSyncException catch (error) {
+      if (!error.message.contains('Action không được hỗ trợ')) rethrow;
+      // An older deployment rejects this action before any attendance row is written.
+    }
+    throw const SheetSyncException(
+      'Apps Script chưa hỗ trợ tab riêng theo ID lớp. Hãy deploy Code.gs mới.',
+    );
   }
 
   Future<Map<String, dynamic>> _post(Map<String, Object> payload) async {

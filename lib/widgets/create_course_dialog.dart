@@ -18,6 +18,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   final _formKey = GlobalKey<FormState>();
   final _subjectController = TextEditingController();
   final _classController = TextEditingController();
+  final _termController = TextEditingController();
   DateTime _startDate = DateTime.now();
   SchedulePreset _preset = SchedulePreset.twentySlotsTenWeeks;
   int _daySlot = 1;
@@ -30,12 +31,14 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
     if (_startDate.weekday == DateTime.sunday) {
       _startDate = _startDate.add(const Duration(days: 1));
     }
+    _termController.text = _suggestedTerm(_startDate);
   }
 
   @override
   void dispose() {
     _subjectController.dispose();
     _classController.dispose();
+    _termController.dispose();
     super.dispose();
   }
 
@@ -47,7 +50,23 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
       initialDate: _startDate,
       selectableDayPredicate: (date) => date.weekday != DateTime.sunday,
     );
-    if (selected != null) setState(() => _startDate = selected);
+    if (selected != null) {
+      setState(() {
+        final usedSuggestion =
+            _termController.text == _suggestedTerm(_startDate);
+        _startDate = selected;
+        if (usedSuggestion) _termController.text = _suggestedTerm(selected);
+      });
+    }
+  }
+
+  String _suggestedTerm(DateTime date) {
+    final season = date.month <= 4
+        ? 'SPRING'
+        : date.month <= 8
+        ? 'SUMMER'
+        : 'FALL';
+    return '${date.year}-$season';
   }
 
   Future<void> _submit() async {
@@ -60,6 +79,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
       await widget.api.createCourseClass(
         subject: _subjectController.text,
         classCode: _classController.text,
+        academicTerm: _termController.text,
         startDate: _startDate,
         preset: _preset,
         daySlot: _daySlot,
@@ -107,6 +127,16 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _termController,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Học kỳ',
+                    hintText: 'Ví dụ: 2026-FALL',
+                  ),
+                  validator: _validateCode,
                 ),
                 const SizedBox(height: 16),
                 Row(

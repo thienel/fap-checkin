@@ -57,3 +57,20 @@ test('an older request cannot replace a newer Sheets revision', () => {
   assert.equal(rows[0][4], 'absent');
   assert.equal(rows[0][10], 2);
 });
+
+test('new course instances use separate sheets while legacy IDs keep their tabs', () => {
+  const names = [];
+  const sheet = {
+    getLastRow: () => 1,
+    getLastColumn: () => 11,
+    getRange: () => ({ getValues: () => [['Slot', 'Date', 'Check-in time', 'Email', 'Status']] }),
+  };
+  const sandbox = {
+    SpreadsheetApp: { openById: () => ({ getSheetByName(name) { names.push(name); return sheet; } }) },
+  };
+  const source = readFileSync(require.resolve('./Code.gs'), 'utf8');
+  vm.runInNewContext(`${source}\nthis.getOrCreateSheet = getOrCreateSheet;`, sandbox);
+  sandbox.getOrCreateSheet('spreadsheet-1', 'PRM393', 'SE01', 'PRM393_SE01');
+  sandbox.getOrCreateSheet('spreadsheet-1', 'PRM393', 'SE01', 'instance-new');
+  assert.deepEqual(names, ['PRM393_SE01', 'instance-new_PRM393_SE01']);
+});

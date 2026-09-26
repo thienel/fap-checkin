@@ -46,6 +46,7 @@ class AttendanceApi {
         id: document.id,
         subject: data['subject'] as String? ?? '',
         classCode: data['classCode'] as String? ?? '',
+        academicTerm: data['academicTerm'] as String?,
       );
     }).toList();
     classes.sort((left, right) => left.label.compareTo(right.label));
@@ -535,6 +536,7 @@ class AttendanceApi {
   Future<void> createCourseClass({
     required String subject,
     required String classCode,
+    required String academicTerm,
     required DateTime startDate,
     required SchedulePreset preset,
     required int daySlot,
@@ -542,10 +544,14 @@ class AttendanceApi {
     final uid = _teacherUid();
     final normalizedSubject = _requiredCode(subject, 'Mã môn');
     final normalizedClass = _requiredCode(classCode, 'Mã lớp');
+    final normalizedTerm = _requiredCode(academicTerm, 'Học kỳ');
     _validateDaySlot(daySlot);
     final schedule = generateSchedule(startDate: startDate, preset: preset);
-    final id = '${normalizedSubject}_$normalizedClass';
-    final reference = _firestore.collection('courseClasses').doc(id);
+    final reference = _firestore.collection('courseClasses').doc();
+    final id = reference.id;
+    final claimReference = _firestore
+        .collection('courseClassClaims')
+        .doc('${uid}_${normalizedTerm}_${normalizedSubject}_$normalizedClass');
 
     // Task 1.2: Sinh toàn bộ lock ID cho mỗi slot trong lịch.
     // Lock ID: {ownerUid}_{date}_{daySlot} để prevent concurrent creation
@@ -568,10 +574,11 @@ class AttendanceApi {
     }
 
     await _firestore.runTransaction((transaction) async {
-      // Đọc course document.
-      final courseDoc = await transaction.get(reference);
-      if (courseDoc.exists) {
-        throw const AttendanceApiException('Môn–lớp này đã tồn tại.');
+      final claim = await transaction.get(claimReference);
+      if (claim.exists) {
+        throw const AttendanceApiException(
+          'Môn–lớp này đã tồn tại trong học kỳ đã chọn.',
+        );
       }
 
       // Đọc tất cả lock trong cùng transaction.
@@ -600,6 +607,7 @@ class AttendanceApi {
       transaction.set(reference, {
         'subject': normalizedSubject,
         'classCode': normalizedClass,
+        'academicTerm': normalizedTerm,
         'startDate': _isoDate(startDate),
         'slotCount': preset.slotCount,
         'weekLabel': preset.weekLabel,
@@ -613,6 +621,14 @@ class AttendanceApi {
             )
             .toList(),
         'ownerUid': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      transaction.set(claimReference, {
+        'ownerUid': uid,
+        'academicTerm': normalizedTerm,
+        'subject': normalizedSubject,
+        'classCode': normalizedClass,
+        'courseClassId': id,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -1491,6 +1507,7 @@ class AttendanceApi {
         transaction.delete(activeReference);
       }
       return (
+        courseClassId: data['courseClassId'] as String,
         subject: data['subject'] as String,
         classCode: data['classCode'] as String,
       );
@@ -1519,6 +1536,7 @@ class AttendanceApi {
         await _sheets.sort(
           subject: sheetTarget.subject,
           classCode: sheetTarget.classCode,
+          courseClassId: sheetTarget.courseClassId,
         );
       } on Object catch (error) {
         warnings.add('Chưa sắp xếp được Google Sheets: $error');
@@ -1704,6 +1722,7 @@ class AttendanceApi {
           revision: revision,
           subject: data['subject'] as String,
           classCode: data['classCode'] as String,
+          courseClassId: data['courseClassId'] as String?,
           slot: (data['slot'] as num).toInt(),
           date: data['date'] as String,
           email: data['email'] as String,

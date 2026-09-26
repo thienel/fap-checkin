@@ -639,10 +639,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
       [],
       ['Chú giải', 'Có mặt; Vắng; Có phép; Nhập tay; Chưa điểm danh; Chưa mở'],
     ];
-    await _saveCsv(
-      '${overview.subject}_${overview.classCode}_attendance_matrix.csv',
-      rows,
-    );
+    await _saveCsv('${overview.courseClassId}_attendance_matrix.csv', rows);
   }
 
   Future<void> _exportSlot(
@@ -682,10 +679,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
           overview.entryFor(student.id, slot.number)?.syncStatus ?? '',
         ],
     ];
-    await _saveCsv(
-      '${overview.subject}_${overview.classCode}_slot_${slot.number}.csv',
-      rows,
-    );
+    await _saveCsv('${overview.courseClassId}_slot_${slot.number}.csv', rows);
   }
 
   Future<void> _saveCsv(String fileName, List<List<dynamic>> rows) async {

@@ -115,9 +115,7 @@ service cloud.firestore {
     }
 
     match /courseClasses/{courseClassId} {
-      // Creating a course-class first reads its deterministic ID to detect a
-      // duplicate. A missing document has no resource.data, so allow that
-      // not-found read explicitly for authenticated teachers.
+      // Existing course IDs remain readable; new instances use auto IDs.
       allow get: if isTeacher()
         && (
           !exists(/databases/$(database)/documents/courseClasses/$(courseClassId))
@@ -128,12 +126,18 @@ service cloud.firestore {
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.keys().hasOnly([
           'subject', 'classCode', 'startDate', 'slotCount', 'weekLabel',
-          'schedule', 'ownerUid', 'createdAt'
+          'schedule', 'ownerUid', 'academicTerm', 'createdAt'
         ])
+        && (('academicTerm' in request.resource.data)
+          ? getAfter(/databases/$(database)/documents/courseClassClaims/$(request.auth.uid + '_' + request.resource.data.academicTerm + '_' + request.resource.data.subject + '_' + request.resource.data.classCode)).data.courseClassId == courseClassId
+          : courseClassId == request.resource.data.subject + '_' + request.resource.data.classCode)
         && request.resource.data.createdAt == request.time;
       allow update: if isTeacher()
         && resource.data.ownerUid == request.auth.uid
-        && request.resource.data.ownerUid == request.auth.uid;
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.subject == resource.data.subject
+        && request.resource.data.classCode == resource.data.classCode
+        && request.resource.data.get('academicTerm', '') == resource.data.get('academicTerm', '');
       allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
 
       match /students/{studentId} {
@@ -226,6 +230,25 @@ service cloud.firestore {
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid;
       allow delete: if false;
+    }
+
+    match /courseClassClaims/{claimId} {
+      allow get: if isTeacher()
+        && claimId.matches('^' + request.auth.uid + '_.*')
+        && (!exists(/databases/$(database)/documents/courseClassClaims/$(claimId))
+          || resource.data.ownerUid == request.auth.uid);
+      allow list, update, delete: if false;
+      allow create: if isTeacher()
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'academicTerm', 'subject', 'classCode',
+          'courseClassId', 'createdAt'
+        ])
+        && request.resource.data.ownerUid == request.auth.uid
+        && claimId == request.auth.uid + '_' + request.resource.data.academicTerm
+          + '_' + request.resource.data.subject + '_' + request.resource.data.classCode
+        && request.resource.data.createdAt == request.time
+        && getAfter(/databases/$(database)/documents/courseClasses/$(request.resource.data.courseClassId)).data.ownerUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/courseClasses/$(request.resource.data.courseClassId)).data.academicTerm == request.resource.data.academicTerm;
     }
 
     // The checkout code is private to teachers and the check-in callable.

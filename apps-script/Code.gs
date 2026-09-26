@@ -25,7 +25,9 @@ function doPost(event) {
       properties.getProperty('SPREADSHEET_ID'),
       'SPREADSHEET_ID',
     );
-    if (payload.action === 'upsert' || payload.action === 'append') {
+    if (payload.action === 'capabilities') {
+      return jsonResponse({ok: true, instanceSheets: true});
+    } else if (payload.action === 'upsert' || payload.action === 'append') {
       const revision = upsertAttendance(spreadsheetId, payload);
       return jsonResponse({ok: true, revision});
     } else if (payload.action === 'sort') {
@@ -48,6 +50,7 @@ function upsertAttendance(spreadsheetId, payload) {
       spreadsheetId,
       requiredText(payload.subject, 'subject'),
       requiredText(payload.classCode, 'classCode'),
+      payload.courseClassId,
     );
     const recordId = requiredText(payload.recordId, 'recordId');
     const revision = Number(payload.revision);
@@ -119,6 +122,7 @@ function sortAttendance(spreadsheetId, payload) {
       spreadsheetId,
       requiredText(payload.subject, 'subject'),
       requiredText(payload.classCode, 'classCode'),
+      payload.courseClassId,
     );
     sortSheet(sheet);
   } finally {
@@ -137,9 +141,11 @@ function sortSheet(sheet) {
   }
 }
 
-function getOrCreateSheet(spreadsheetId, subject, classCode) {
+function getOrCreateSheet(spreadsheetId, subject, classCode, courseClassId) {
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
-  const title = `${subject}_${classCode}`
+  const legacyId = `${subject}_${classCode}`;
+  const title = (courseClassId && courseClassId !== legacyId
+    ? `${courseClassId}_${legacyId}` : legacyId)
     .replace(/[\\/?*\[\]:]/g, '_')
     .slice(0, 100);
   let sheet = spreadsheet.getSheetByName(title);

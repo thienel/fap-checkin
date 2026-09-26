@@ -67,6 +67,22 @@ deployment cũ không xác nhận revision sẽ để bản ghi ở trạng thá
 lại sau khi cập nhật Apps Script. Các tab Sheets hiện có được thêm cột `Revision`
 tự động khi nhận lượt ghi đầu tiên từ bản mới.
 
+### Định danh lớp theo học kỳ
+
+Lớp mới có ID riêng và trường `academicTerm` (ví dụ `2026-FALL`). Cùng giảng viên
+chỉ được tạo một lớp cho mỗi bộ học kỳ–môn–mã lớp; giảng viên khác hoặc học kỳ
+khác có thể dùng lại mã môn–lớp. Các lớp cũ giữ nguyên ID và đường dẫn Firestore;
+không đổi tên tài liệu `courseClasses`, `attendance`, phiên hay bản ghi đã có.
+
+Khi triển khai thay đổi này, cập nhật Apps Script `Code.gs` trước, rồi triển khai
+Firestore Rules và desktop mới. Apps Script giữ tên tab cũ `môn_lớp` cho lớp có ID
+legacy; mỗi lớp mới dùng tab riêng bắt đầu bằng ID lớp. `Record ID` cũ được giữ
+nguyên, còn bản ghi mới đã chứa ID lớp trong đường dẫn nên không trùng với lịch
+sử. Desktop kiểm tra khả năng hỗ trợ tab riêng trước khi gửi bản ghi lớp mới;
+deployment Apps Script cũ sẽ để bản ghi chờ đồng bộ thay vì ghi nhầm vào tab cũ.
+Không cần chuyển dữ liệu cũ; nếu cần di chuyển một lớp đang dùng, phải sao lưu
+và đối chiếu roster, phiên, attendance và tab Sheets theo ID trước khi thực hiện.
+
 Các thay đổi điểm danh được lưu vào Firestore trước với `syncStatus: pending`.
 Nếu Apps Script tạm thời lỗi, bản ghi chuyển thành `error` thay vì bị mất. Sau khi
 deployment hoạt động, nút làm mới ở màn hình **Tổng quan lớp** sẽ thử đồng bộ lại

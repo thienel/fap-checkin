@@ -13,6 +13,7 @@ import {
   getDoc,
   getDocs,
   query,
+  serverTimestamp,
   setDoc,
   updateDoc,
   where,
@@ -201,6 +202,46 @@ test('course owner can read and list roster, another teacher cannot', async () =
   if (roster.size !== 2) throw new Error(`Expected two students, got ${roster.size}.`);
   await assertFails(getDoc(doc(otherStudents, 'student-hash-1')));
   await assertFails(getDocs(otherStudents));
+});
+
+test('course instances are isolated by owner and academic term', async () => {
+  async function createInstance(uid, term, id) {
+    const db = testEnvironment.authenticatedContext(uid).firestore();
+    const course = doc(db, 'courseClasses', id);
+    const claim = doc(db, 'courseClassClaims', `${uid}_${term}_PRM393_SE01`);
+    const batch = writeBatch(db);
+    batch.set(course, {
+      subject: 'PRM393', classCode: 'SE01', academicTerm: term,
+      startDate: '2026-09-01', slotCount: 1, weekLabel: 'test',
+      schedule: [], ownerUid: uid, createdAt: serverTimestamp(),
+    });
+    batch.set(claim, {
+      ownerUid: uid, academicTerm: term, subject: 'PRM393',
+      classCode: 'SE01', courseClassId: id, createdAt: serverTimestamp(),
+    });
+    await assertSucceeds(batch.commit());
+    return { db, course, claim };
+  }
+
+  const first = await createInstance(teacherUid, '2026-FALL', 'instance-first');
+  const second = await createInstance(otherTeacherUid, '2026-FALL', 'instance-other-owner');
+  const third = await createInstance(teacherUid, '2027-SPRING', 'instance-next-term');
+  await assertSucceeds(getDoc(first.course));
+  await assertSucceeds(getDoc(second.course));
+  await assertSucceeds(getDoc(third.course));
+  await assertFails(getDoc(doc(second.db, 'courseClasses', 'instance-first')));
+  await assertFails(setDoc(first.claim, { courseClassId: 'another-instance' }, { merge: true }));
+  const duplicate = writeBatch(first.db);
+  duplicate.set(doc(first.db, 'courseClasses', 'instance-duplicate'), {
+    subject: 'PRM393', classCode: 'SE01', academicTerm: '2026-FALL',
+    startDate: '2026-09-02', slotCount: 1, weekLabel: 'test',
+    schedule: [], ownerUid: teacherUid, createdAt: serverTimestamp(),
+  });
+  duplicate.set(first.claim, {
+    ownerUid: teacherUid, academicTerm: '2026-FALL', subject: 'PRM393',
+    classCode: 'SE01', courseClassId: 'instance-duplicate', createdAt: serverTimestamp(),
+  });
+  await assertFails(duplicate.commit());
 });
 
 test('course owner can list canonical records for a slot', async () => {
