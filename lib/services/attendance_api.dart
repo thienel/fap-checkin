@@ -273,72 +273,62 @@ class AttendanceApi {
       }
     }
 
-    var completed = 0;
-    // Mỗi sinh viên hợp lệ tạo 2 writes: student + claim.
-    final totalWrites =
-        validRows.length * 2 +
-        (mode == RosterImportMode.replaceInactive ? existing.length : 0);
-
-    Future<void> commitChunks(
-      List<void Function(WriteBatch)> operations,
-    ) async {
-      for (var start = 0; start < operations.length; start += 400) {
-        final batch = _firestore.batch();
-        final end = min(start + 400, operations.length);
-        for (var index = start; index < end; index++) {
-          operations[index](batch);
-        }
-        await batch.commit();
-        completed += end - start;
-        onProgress?.call(completed, totalWrites);
-      }
+    if (validRows.isEmpty) {
+      throw const AttendanceApiException(
+        'File không có sinh viên hợp lệ để import.',
+      );
     }
-
-    // Task 1.1: Chỉ deactivate sau khi validate toàn bộ data mới hợp lệ.
-    if (mode == RosterImportMode.replaceInactive && existing.isNotEmpty) {
-      await commitChunks([
-        for (final document in existingSnapshot.docs)
-          (batch) => batch.update(document.reference, {
-            'active': false,
-            'updatedAt': FieldValue.serverTimestamp(),
-            'updatedBy': uid,
-          }),
-      ]);
-    }
-
-    // Ghi student document + studentCodeClaim atomically trong cùng batch.
-    await commitChunks([
+    final importedIds = {
       for (final row in validRows)
-        ...(() {
-          final studentId = sha256
-              .convert(utf8.encode(row.emailNormalized))
-              .toString();
-          final previous = existing[studentId];
-          final code = row.studentCodeNormalized;
-          return [
-            // Write 1: student document với studentCodeNormalized.
-            (WriteBatch batch) => batch.set(students.doc(studentId), {
-              'emailNormalized': row.emailNormalized,
-              'email': row.email.trim(),
-              'studentCode': row.studentCode.trim(),
-              'studentCodeNormalized': code,
-              'fullName': row.fullName.trim(),
-              'attendancePolicy': previous?['attendancePolicy'] ?? 'normal',
-              'active': true,
-              'importedAt': FieldValue.serverTimestamp(),
-              'importedBy': uid,
-            }, SetOptions(merge: true)),
-            // Write 2: studentCodeClaim để enforce uniqueness khi concurrent.
-            (WriteBatch batch) => batch.set(claims.doc(code), {
-              'studentId': studentId,
-              'ownerUid': uid,
-              'createdAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true)),
-          ];
-        })(),
-    ]);
-
-    await courseReference.collection('imports').add({
+        sha256.convert(utf8.encode(row.emailNormalized)).toString(),
+    };
+    final deactivated = mode == RosterImportMode.replaceInactive
+        ? existingSnapshot.docs
+              .where((doc) => !importedIds.contains(doc.id))
+              .toList()
+        : <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    // One Firestore batch includes every roster change and the import receipt.
+    // A failed batch leaves the active roster intact. Larger imports need a
+    // versioned roster design before they can be safely supported.
+    final totalWrites = validRows.length * 2 + deactivated.length + 1;
+    if (totalWrites > 500) {
+      throw AttendanceApiException(
+        'Import cần $totalWrites thao tác, vượt giới hạn an toàn 500 của một batch. '
+        'Hãy chia file thành các lần merge nhỏ hơn; chế độ thay thế cần file nhỏ hơn.',
+      );
+    }
+    final batch = _firestore.batch();
+    for (final document in deactivated) {
+      batch.update(document.reference, {
+        'active': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': uid,
+      });
+    }
+    for (final row in validRows) {
+      final studentId = sha256
+          .convert(utf8.encode(row.emailNormalized))
+          .toString();
+      final previous = existing[studentId];
+      final code = row.studentCodeNormalized;
+      batch.set(students.doc(studentId), {
+        'emailNormalized': row.emailNormalized,
+        'email': row.email.trim(),
+        'studentCode': row.studentCode.trim(),
+        'studentCodeNormalized': code,
+        'fullName': row.fullName.trim(),
+        'attendancePolicy': previous?['attendancePolicy'] ?? 'normal',
+        'active': true,
+        'importedAt': FieldValue.serverTimestamp(),
+        'importedBy': uid,
+      }, SetOptions(merge: true));
+      batch.set(claims.doc(code), {
+        'studentId': studentId,
+        'ownerUid': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    batch.set(courseReference.collection('imports').doc(), {
       'fileName': fileName,
       'totalRows': rows.length,
       'validRows': validRows.length,
@@ -347,6 +337,8 @@ class AttendanceApi {
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': uid,
     });
+    await batch.commit();
+    onProgress?.call(totalWrites, totalWrites);
     return RosterImportResult(
       totalRows: rows.length,
       validRows: validRows.length,

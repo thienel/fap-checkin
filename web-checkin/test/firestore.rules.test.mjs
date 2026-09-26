@@ -14,7 +14,9 @@ import {
   getDocs,
   query,
   setDoc,
+  updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 
 const projectId = 'demo-fap-checkin-rules';
@@ -518,4 +520,18 @@ test('an existing unversioned record can migrate to revision zero', async () => 
     attendanceStatus: 'absent',
     syncStatus: 'pending',
   }, { merge: true }));
+});
+
+test('a rejected import batch does not deactivate the current roster', async () => {
+  const db = testEnvironment.authenticatedContext(teacherUid).firestore();
+  const student = doc(db, 'courseClasses', courseClassId, 'students', 'student-hash-1');
+  const claim = doc(db, 'courseClasses', courseClassId, 'studentCodeClaims', 'SE001');
+  await assertSucceeds(updateDoc(student, { active: true, importedBy: teacherUid }));
+  const batch = writeBatch(db);
+  batch.update(student, { active: false });
+  batch.set(claim, { studentId: 'student-hash-2', ownerUid: teacherUid }, { merge: true });
+
+  await assertFails(batch.commit());
+  const current = await getDoc(student);
+  if (current.data()?.active !== true) throw new Error('Failed import deactivated roster.');
 });
