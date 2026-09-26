@@ -262,6 +262,7 @@ async function writeCheckIn(user, checkoutCode) {
     if (error?.code === 'permission-denied') {
       if (validationStage === 'qr') throw new Error('qr-expired');
       if (validationStage === 'session') throw new Error('session-stopped');
+      if (validationStage === 'roster') throw new Error('student-not-in-roster');
       if (validationStage === 'checkout') throw new Error('checkout-code-invalid');
     }
     throw error;

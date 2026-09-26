@@ -65,6 +65,15 @@ before(async () => {
       active: true,
       attendancePolicy: 'normal',
     });
+    await setDoc(doc(db, 'courseClasses', courseClassId, 'students', 'student-hash-2'), {
+      emailNormalized: 'student2@fpt.edu.vn',
+      email: 'student2@fpt.edu.vn',
+      studentCode: 'SE002',
+      studentCodeNormalized: 'SE002',
+      fullName: 'Nguyen Van B',
+      active: true,
+      attendancePolicy: 'normal',
+    });
 
     // Active session
     await setDoc(doc(db, 'attendanceSessions', 'session-1'), {
@@ -166,6 +175,31 @@ after(async () => {
 // =============================================================================
 // Test goc - giu nguyen
 // =============================================================================
+
+test('Google student can read only their own roster profile', async () => {
+  const db = testEnvironment.authenticatedContext(studentUid, {
+    email: 'student1@fpt.edu.vn',
+    firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const students = collection(db, 'courseClasses', courseClassId, 'students');
+
+  await assertSucceeds(getDoc(doc(students, 'student-hash-1')));
+  await assertFails(getDoc(doc(students, 'student-hash-2')));
+  await assertFails(getDocs(students));
+});
+
+test('course owner can read and list roster, another teacher cannot', async () => {
+  const ownerDb = testEnvironment.authenticatedContext(teacherUid).firestore();
+  const otherDb = testEnvironment.authenticatedContext(otherTeacherUid).firestore();
+  const ownerStudents = collection(ownerDb, 'courseClasses', courseClassId, 'students');
+  const otherStudents = collection(otherDb, 'courseClasses', courseClassId, 'students');
+
+  await assertSucceeds(getDoc(doc(ownerStudents, 'student-hash-1')));
+  const roster = await assertSucceeds(getDocs(ownerStudents));
+  if (roster.size !== 2) throw new Error(`Expected two students, got ${roster.size}.`);
+  await assertFails(getDoc(doc(otherStudents, 'student-hash-1')));
+  await assertFails(getDocs(otherStudents));
+});
 
 test('course owner can list canonical records for a slot', async () => {
   const db = testEnvironment.authenticatedContext(teacherUid).firestore();

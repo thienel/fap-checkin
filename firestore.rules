@@ -136,9 +136,10 @@ service cloud.firestore {
       allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
 
       match /students/{studentId} {
-        // A Google user may only perform a direct lookup. IDs are SHA-256 hashes
-        // of normalized emails; collection listing remains forbidden.
-        allow get: if isGoogleUser()
+        // Student IDs are derived from email and can be guessed. A direct
+        // lookup must also belong to the signed-in Google account.
+        allow get: if (isGoogleUser()
+            && resource.data.emailNormalized == request.auth.token.email)
           || (isTeacher()
             && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
               == request.auth.uid);
