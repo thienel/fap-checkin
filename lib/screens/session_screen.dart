@@ -26,27 +26,32 @@ class SessionScreen extends StatefulWidget {
     required this.api,
     required this.session,
     this.liveSessionService,
+    this.now,
   });
 
   final AttendanceApi api;
   final AttendanceSession session;
   final LiveSessionService? liveSessionService;
+  final DateTime Function()? now;
 
   @override
   State<SessionScreen> createState() => _SessionScreenState();
 }
 
 class _SessionScreenState extends State<SessionScreen> {
+  DateTime get _now => widget.now?.call() ?? DateTime.now();
   late final LiveSessionService _service;
   late final Stream<LiveAttendanceState> _liveStream;
 
   Timer? _rotationTimer;
   Timer? _countdownTimer;
   Timer? _checkoutRetryTimer;
+  Timer? _qrRetryTimer;
 
   IssuedQr? _qr;
   final ValueNotifier<IssuedQr?> _qrNotifier = ValueNotifier<IssuedQr?>(null);
   late final ValueNotifier<int> _secondsLeftNotifier;
+  final ValueNotifier<int> _qrValidityLeftNotifier = ValueNotifier<int>(0);
   late final ValueNotifier<int> _checkoutSecondsLeftNotifier;
   late String _checkoutCode;
   late DateTime? _checkoutCodeIssuedAt;
@@ -90,6 +95,18 @@ class _SessionScreenState extends State<SessionScreen> {
 
     // Timer đếm ngược giây hiển thị trên UI
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final qr = _qr;
+      if (qr != null) {
+        final remaining = qr.expiresAt.difference(_now).inSeconds;
+        _qrValidityLeftNotifier.value = max(0, remaining);
+        if (remaining <= 0) {
+          setState(() {
+            _qr = null;
+            _qrNotifier.value = null;
+          });
+          unawaited(_issueQr());
+        }
+      }
       if (_secondsLeftNotifier.value > 0) {
         _secondsLeftNotifier.value -= 1;
       }
@@ -107,7 +124,9 @@ class _SessionScreenState extends State<SessionScreen> {
     _rotationTimer?.cancel();
     _countdownTimer?.cancel();
     _checkoutRetryTimer?.cancel();
+    _qrRetryTimer?.cancel();
     _qrNotifier.dispose();
+    _qrValidityLeftNotifier.dispose();
     _secondsLeftNotifier.dispose();
     _checkoutSecondsLeftNotifier.dispose();
     _searchController.dispose();
@@ -121,19 +140,41 @@ class _SessionScreenState extends State<SessionScreen> {
       final qr = await widget.api.issueQr(widget.session.id);
       if (mounted) {
         setState(() {
-          _qr = qr;
-          _qrNotifier.value = qr;
+          final valid = qr.expiresAt.isAfter(_now);
+          _qr = valid ? qr : null;
+          _qrNotifier.value = _qr;
+          _qrValidityLeftNotifier.value = valid
+              ? max(0, qr.expiresAt.difference(_now).inSeconds)
+              : 0;
           _secondsLeftNotifier.value = widget.session.rotationSeconds;
-          _error = null;
+          _error = valid ? null : 'QR mới đã hết hạn. Đang thử lại.';
         });
+        if (qr.expiresAt.isAfter(_now)) {
+          _qrRetryTimer?.cancel();
+        } else {
+          _scheduleQrRetry();
+        }
       }
     } catch (error) {
       if (mounted) {
-        setState(() => _error = 'Không tạo được QR mới: $error');
+        setState(() {
+          _qr = null;
+          _qrNotifier.value = null;
+          _qrValidityLeftNotifier.value = 0;
+          _error = 'Không tạo được QR mới: $error';
+        });
+        _scheduleQrRetry();
       }
     } finally {
       _issuing = false;
     }
+  }
+
+  void _scheduleQrRetry() {
+    _qrRetryTimer?.cancel();
+    _qrRetryTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted && !_stopping) unawaited(_issueQr());
+    });
   }
 
   Future<void> _rotateCheckoutCode() async {
@@ -256,6 +297,7 @@ class _SessionScreenState extends State<SessionScreen> {
     _rotationTimer?.cancel();
     _countdownTimer?.cancel();
     _checkoutRetryTimer?.cancel();
+    _qrRetryTimer?.cancel();
     if (warnings.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Đã ngừng phiên. ${warnings.join(' ')}')),
@@ -304,6 +346,7 @@ class _SessionScreenState extends State<SessionScreen> {
         session: widget.session,
         qrNotifier: _qrNotifier,
         countdownNotifier: _secondsLeftNotifier,
+        validityNotifier: _qrValidityLeftNotifier,
       ),
     );
   }
@@ -744,43 +787,61 @@ class _SessionScreenState extends State<SessionScreen> {
                       ),
                     ),
                     const Spacer(),
-                    ValueListenableBuilder<int>(
-                      valueListenable: _secondsLeftNotifier,
-                      builder: (context, seconds, _) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.surfaceMuted,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'Đổi sau: ${seconds.toString().padLeft(2, '0')}s',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textMuted,
+                    if (_qr == null)
+                      const Text(
+                        'Đang thử lại',
+                        style: TextStyle(
+                          color: AppColors.warning,
+                          fontSize: 12,
+                        ),
+                      )
+                    else
+                      ValueListenableBuilder<int>(
+                        valueListenable: _secondsLeftNotifier,
+                        builder: (context, seconds, _) {
+                          return Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
                             ),
-                          ),
-                        );
-                      },
-                    ),
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceMuted,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Đổi sau: ${seconds.toString().padLeft(2, '0')}s',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                   ],
                 ),
                 const SizedBox(height: 12),
                 // QR Container
                 if (_qr == null)
-                  const SizedBox.square(
+                  SizedBox.square(
                     dimension: 210,
                     child: Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          CircularProgressIndicator(strokeWidth: 3),
-                          SizedBox(height: 12),
-                          Text('Đang nạp mã QR…'),
+                          const Icon(
+                            Icons.qr_code_2_outlined,
+                            size: 54,
+                            color: AppColors.textMuted,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _error == null
+                                ? 'Đang tạo QR…'
+                                : 'Đang kết nối lại — tạm ngừng quét',
+                            textAlign: TextAlign.center,
+                          ),
                         ],
                       ),
                     ),
@@ -808,6 +869,17 @@ class _SessionScreenState extends State<SessionScreen> {
                     ),
                   ),
                 const SizedBox(height: 12),
+                if (_qr != null)
+                  ValueListenableBuilder<int>(
+                    valueListenable: _qrValidityLeftNotifier,
+                    builder: (context, seconds, _) => Text(
+                      'QR còn hiệu lực: ${seconds}s',
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 // Nút Phóng to QR
                 SizedBox(
                   width: double.infinity,
@@ -820,7 +892,7 @@ class _SessionScreenState extends State<SessionScreen> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                     ),
-                    onPressed: _openFullscreenQr,
+                    onPressed: _qr == null ? null : _openFullscreenQr,
                     icon: const Icon(Icons.fullscreen, size: 20),
                     label: const Text(
                       'Phóng to QR',
@@ -1679,11 +1751,13 @@ class _FullscreenQrDialog extends StatelessWidget {
     required this.session,
     required this.qrNotifier,
     required this.countdownNotifier,
+    required this.validityNotifier,
   });
 
   final AttendanceSession session;
   final ValueNotifier<IssuedQr?> qrNotifier;
   final ValueNotifier<int> countdownNotifier;
+  final ValueNotifier<int> validityNotifier;
 
   @override
   Widget build(BuildContext context) {
@@ -1793,8 +1867,23 @@ class _FullscreenQrDialog extends StatelessWidget {
                             valueListenable: qrNotifier,
                             builder: (context, qr, _) {
                               if (qr == null) {
-                                return const CircularProgressIndicator(
-                                  color: Colors.white,
+                                return const Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.qr_code_2_outlined,
+                                      size: 90,
+                                      color: Colors.white70,
+                                    ),
+                                    SizedBox(height: 16),
+                                    Text(
+                                      'Đang kết nối lại — tạm ngừng quét',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 22,
+                                      ),
+                                    ),
+                                  ],
                                 );
                               }
 
@@ -1824,6 +1913,18 @@ class _FullscreenQrDialog extends StatelessWidget {
                                     ),
                                   ),
                                   const SizedBox(height: 24),
+                                  ValueListenableBuilder<int>(
+                                    valueListenable: validityNotifier,
+                                    builder: (context, seconds, _) => Text(
+                                      'QR còn hiệu lực: ${seconds}s',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
                                   ValueListenableBuilder<int>(
                                     valueListenable: countdownNotifier,
                                     builder: (context, seconds, _) {

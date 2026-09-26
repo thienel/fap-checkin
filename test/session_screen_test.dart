@@ -13,19 +13,24 @@ class FakeAttendanceApi implements AttendanceApi {
   FakeAttendanceApi({
     this.failFirstStop = false,
     this.activeAfterFailure = true,
+    this.failAfterFirstQr = false,
+    this.qrLifetime = const Duration(seconds: 15),
   });
 
   final bool failFirstStop;
   final bool activeAfterFailure;
+  final bool failAfterFirstQr;
+  final Duration qrLifetime;
   int issueCount = 0;
   int stopCount = 0;
 
   @override
   Future<IssuedQr> issueQr(String sessionId) async {
     issueCount++;
+    if (failAfterFirstQr && issueCount > 1) throw Exception('QR unavailable');
     return IssuedQr(
       url: 'https://test-qr.web.app?token=test-token',
-      expiresAt: DateTime.now().add(const Duration(seconds: 15)),
+      expiresAt: DateTime.now().add(qrLifetime),
     );
   }
 
@@ -96,6 +101,40 @@ void main() {
     active: true,
     attendancePolicy: AttendancePolicy.normal,
   );
+
+  testWidgets('expired QR is hidden in fullscreen after refresh fails', (
+    tester,
+  ) async {
+    var currentTime = DateTime.now();
+    final fakeApi = FakeAttendanceApi(failAfterFirstQr: true);
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SessionScreen(
+          api: fakeApi,
+          session: session,
+          now: () => currentTime,
+          liveSessionService: FakeLiveSessionService(
+            const Stream<LiveAttendanceState>.empty(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.textContaining('QR còn hiệu lực'), findsOneWidget);
+    await tester.tap(find.text('Phóng to QR'));
+    await tester.pump();
+    currentTime = currentTime.add(const Duration(seconds: 30));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(fakeApi.issueCount, 2);
+    expect(
+      find.text('Đang kết nối lại — tạm ngừng quét'),
+      findsAtLeastNWidgets(1),
+    );
+  });
 
   testWidgets(
     'SessionScreen hiển thị đầy đủ danh sách, thống kê và bộ lọc trạng thái',
