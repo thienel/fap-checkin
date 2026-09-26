@@ -33,7 +33,7 @@
         </button>
 
         <form id="checkout-form" class="checkout-form hidden">
-          <label class="field-label" for="checkout-code">Checkout code</label>
+          <label class="field-label" for="checkout-code">Mã xác nhận điểm danh</label>
           <input
             id="checkout-code"
             name="checkoutCode"
@@ -41,19 +41,22 @@
             inputmode="text"
             autocomplete="one-time-code"
             autocapitalize="characters"
-            minlength="4"
-            maxlength="12"
-            pattern="[A-Za-z0-9]{4,12}"
+            minlength="5"
+            maxlength="5"
+            pattern="[A-Za-z0-9]{5}"
+            aria-describedby="code-help code-error"
             spellcheck="false"
             required
           />
+          <p id="code-help" class="field-help">Mã xác nhận gồm 5 ký tự chữ hoặc số.</p>
+          <p id="code-error" class="field-error" aria-live="polite"></p>
           <button id="checkout-submit" class="primary-button" type="submit">
             Xác nhận điểm danh
           </button>
         </form>
 
         <p class="privacy">
-          Hệ thống dùng email Google và checkout code để xác nhận điểm danh.
+          Hệ thống dùng email Google và mã xác nhận để điểm danh.
         </p>
       </section>
     </main>

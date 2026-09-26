@@ -32,6 +32,7 @@ const status = document.querySelector('#status');
 const signInButton = document.querySelector('#sign-in');
 const checkoutForm = document.querySelector('#checkout-form');
 const checkoutCodeInput = document.querySelector('#checkout-code');
+const codeError = document.querySelector('#code-error');
 const checkoutSubmitButton = document.querySelector('#checkout-submit');
 const params = new URLSearchParams(window.location.search);
 const urlToken = params.get('t');
@@ -41,6 +42,11 @@ const token = urlToken || sessionStorage.getItem('attendanceQrToken');
 let auth;
 let db;
 let submitStarted = false;
+
+function setCodeError(text = '') {
+  codeError.textContent = text;
+  checkoutCodeInput.setAttribute('aria-invalid', text ? 'true' : 'false');
+}
 
 function showStatus(kind, heading, detail, { allowCheckout = false, allowSignIn = false } = {}) {
   title.textContent = heading;
@@ -52,8 +58,9 @@ function showStatus(kind, heading, detail, { allowCheckout = false, allowSignIn 
 }
 
 function promptCheckoutCode(user) {
-  title.textContent = 'Nhập checkout code';
-  message.textContent = `Đã đăng nhập bằng ${user.email ?? 'tài khoản Google'}. Nhập code giảng viên cung cấp để xác nhận điểm danh.`;
+  title.textContent = 'Nhập mã xác nhận';
+  message.textContent = `Đã đăng nhập bằng ${user.email ?? 'tài khoản Google'}. Nhập mã giảng viên cung cấp để xác nhận điểm danh.`;
+  setCodeError();
   status.className = 'status hidden';
   status.textContent = '';
   signInButton.classList.add('hidden');
@@ -85,10 +92,10 @@ function readableError(error, userEmail = '') {
     return 'Tài khoản Google của bạn không cung cấp địa chỉ email.';
   }
   if (msg.includes('checkout-code-invalid')) {
-    return 'Checkout code chưa đúng. Hãy kiểm tra lại với giảng viên rồi thử lại.';
+    return 'Mã xác nhận chưa đúng. Hãy kiểm tra lại với giảng viên rồi thử lại.';
   }
   if (msg.includes('checkout-code-expired')) {
-    return 'Checkout code vừa hết hạn. Hãy lấy mã mới nhất trên màn hình giảng viên.';
+    return 'Mã xác nhận vừa hết hạn. Hãy lấy mã mới nhất trên màn hình giảng viên.';
   }
   if (msg.includes('qr-expired')) {
     return 'QR đã hết hạn. Hãy quét lại mã mới nhất trên màn hình giảng viên.';
@@ -112,7 +119,7 @@ async function submitCheckIn(user, code) {
   if (submitStarted || !token) return;
   submitStarted = true;
   checkoutSubmitButton.disabled = true;
-  showStatus('loading', 'Đang xác nhận…', 'Đang kiểm tra checkout code và ghi nhận điểm danh.');
+  showStatus('loading', 'Đang xác nhận…', 'Đang kiểm tra mã xác nhận và ghi nhận điểm danh.');
 
   try {
     if (!user.email) throw new Error('google-account-has-no-email');
@@ -136,13 +143,14 @@ async function submitCheckIn(user, code) {
       showStatus(
         'error',
         errorMessage.includes('checkout-code-expired')
-          ? 'Checkout code đã đổi'
-          : 'Checkout code chưa đúng',
+          ? 'Mã xác nhận đã đổi'
+          : 'Mã xác nhận chưa đúng',
         readableError(error, user?.email),
         {
           allowCheckout: true,
         },
       );
+      setCodeError(readableError(error, user?.email));
       checkoutCodeInput.focus();
       return;
     }
@@ -297,6 +305,11 @@ async function bootstrap() {
     const user = auth.currentUser;
     if (user) await submitCheckIn(user, checkoutCodeInput.value);
   });
+
+  checkoutCodeInput.addEventListener('invalid', () => {
+    setCodeError('Mã xác nhận phải gồm đúng 5 ký tự chữ hoặc số.');
+  });
+  checkoutCodeInput.addEventListener('input', () => setCodeError());
 
   signInButton.addEventListener('click', async () => {
     signInButton.disabled = true;
