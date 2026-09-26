@@ -15,12 +15,13 @@
           </svg>
         </div>
         <p class="eyebrow">FAP CHECK ATTENDANCE</p>
-        <h1 id="title">Xác nhận điểm danh</h1>
+        <h1 id="title" tabindex="-1">Xác nhận điểm danh</h1>
         <p id="message" class="message">
           Đăng nhập bằng tài khoản Google trước khi mã QR hết hạn.
         </p>
 
-        <div id="status" class="status hidden" role="status" aria-live="polite"></div>
+        <div id="status" class="status hidden" aria-hidden="true"></div>
+        <div id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
         <button id="sign-in" class="primary-button" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true">

@@ -29,6 +29,7 @@ const firebaseConfig = {
 const title = document.querySelector('#title');
 const message = document.querySelector('#message');
 const status = document.querySelector('#status');
+const announcement = document.querySelector('#announcement');
 const signInButton = document.querySelector('#sign-in');
 const checkoutForm = document.querySelector('#checkout-form');
 const checkoutCodeInput = document.querySelector('#checkout-code');
@@ -52,10 +53,18 @@ function setCodeError(text = '') {
 function showStatus(kind, heading, detail, { allowCheckout = false, allowSignIn = false } = {}) {
   title.textContent = heading;
   message.textContent = detail;
+  announcement.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  announcement.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  announcement.textContent = `${heading}. ${detail}`;
   status.className = `status ${kind}`;
   status.textContent = kind === 'success' ? '✓' : kind === 'info' ? 'i' : kind === 'loading' ? '…' : '!';
   signInButton.classList.toggle('hidden', !allowSignIn);
   checkoutForm.classList.toggle('hidden', !allowCheckout);
+  if (kind !== 'loading') {
+    if (allowCheckout) checkoutCodeInput.focus();
+    else if (allowSignIn) signInButton.focus();
+    else title.focus();
+  }
 }
 
 function promptCheckoutCode(user) {
@@ -64,6 +73,7 @@ function promptCheckoutCode(user) {
   setCodeError();
   status.className = 'status hidden';
   status.textContent = '';
+  announcement.textContent = '';
   signInButton.classList.add('hidden');
   checkoutForm.classList.remove('hidden');
   checkoutCodeInput.focus();
