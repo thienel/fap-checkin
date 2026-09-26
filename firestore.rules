@@ -120,7 +120,11 @@ service cloud.firestore {
         && (
           !exists(/databases/$(database)/documents/courseClasses/$(courseClassId))
           || resource.data.ownerUid == request.auth.uid
-        );
+        )
+        || (isGoogleUser()
+          && exists(/databases/$(database)/documents/courseClasses/$(courseClassId)/studentAccess/$(request.auth.uid))
+          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)/studentAccess/$(request.auth.uid)).data.emailNormalized == request.auth.token.email
+          && studentData(courseClassId, get(/databases/$(database)/documents/courseClasses/$(courseClassId)/studentAccess/$(request.auth.uid)).data.studentId).active == true);
       allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
       allow create: if isTeacher()
         && request.resource.data.ownerUid == request.auth.uid
@@ -198,6 +202,80 @@ service cloud.firestore {
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt == request.time;
         allow update, delete: if false;
+      }
+      match /studentAccess/{uid} {
+        allow get: if (isGoogleUser() && uid == request.auth.uid)
+          || ownsCourse(courseClassId);
+        allow list, update, delete: if false;
+        allow create: if isGoogleUser()
+          && uid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['studentId', 'emailNormalized', 'createdAt'])
+          && request.resource.data.emailNormalized == request.auth.token.email
+          && request.resource.data.studentId is string
+          && request.resource.data.createdAt == request.time
+          && studentData(courseClassId, request.resource.data.studentId).emailNormalized == request.auth.token.email
+          && studentData(courseClassId, request.resource.data.studentId).active == true;
+      }
+
+      match /leaveRequests/{requestId} {
+        allow get, list: if ownsCourse(courseClassId)
+          || (isGoogleUser() && resource.data.firebaseUid == request.auth.uid);
+        allow create: if isGoogleUser()
+          && request.resource.data.keys().hasOnly([
+            'ownerUid', 'courseClassId', 'studentId', 'firebaseUid',
+            'emailNormalized', 'slot', 'date', 'slotDate', 'reason',
+            'status', 'createdAt'
+          ])
+          && request.resource.data.courseClassId == courseClassId
+          && request.resource.data.firebaseUid == request.auth.uid
+          && request.resource.data.emailNormalized == request.auth.token.email
+          && request.resource.data.studentId is string
+          && requestId == request.resource.data.studentId + '_' + string(request.resource.data.slot)
+          && studentData(courseClassId, request.resource.data.studentId).emailNormalized == request.auth.token.email
+          && studentData(courseClassId, request.resource.data.studentId).active == true
+          && request.resource.data.ownerUid == get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
+          && request.resource.data.slot is int
+          && request.resource.data.slot >= 1
+          && request.resource.data.slot <= get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.schedule.size()
+          && request.resource.data.date == get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.schedule[request.resource.data.slot - 1].date
+          && request.resource.data.slotDate is timestamp
+          && request.resource.data.slotDate == timestamp.value(request.resource.data.date + 'T00:00:00Z')
+          && request.resource.data.slotDate > request.time
+          && request.resource.data.reason is string
+          && request.resource.data.reason.size() >= 10
+          && request.resource.data.reason.size() <= 1000
+          && request.resource.data.status == 'pending'
+          && request.resource.data.createdAt == request.time;
+        allow update: if ownsCourse(courseClassId)
+          && resource.data.status == 'pending'
+          && request.resource.data.status in ['approved', 'rejected']
+          && !exists(/databases/$(database)/documents/courseClasses/$(courseClassId)/leaveRequests/$(requestId)/audit/decision)
+          && getAfter(/databases/$(database)/documents/courseClasses/$(courseClassId)/leaveRequests/$(requestId)/audit/decision).data.to == request.resource.data.status
+          && getAfter(/databases/$(database)/documents/courseClasses/$(courseClassId)/leaveRequests/$(requestId)/audit/decision).data.response == request.resource.data.response
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'response', 'decidedAt', 'decidedBy'
+          ])
+          && request.resource.data.response is string
+          && request.resource.data.response.size() <= 1000
+          && request.resource.data.decidedBy == request.auth.uid
+          && request.resource.data.decidedAt == request.time;
+        allow delete: if false;
+
+        match /audit/{auditId} {
+          allow get, list: if ownsCourse(courseClassId);
+          allow create: if ownsCourse(courseClassId)
+            && auditId == 'decision'
+            && get(/databases/$(database)/documents/courseClasses/$(courseClassId)/leaveRequests/$(requestId)).data.status == 'pending'
+            && getAfter(/databases/$(database)/documents/courseClasses/$(courseClassId)/leaveRequests/$(requestId)).data.status == request.resource.data.to
+            && request.resource.data.keys().hasOnly([
+              'from', 'to', 'response', 'actorUid', 'decidedAt'
+            ])
+            && request.resource.data.from == 'pending'
+            && request.resource.data.to in ['approved', 'rejected']
+            && request.resource.data.actorUid == request.auth.uid
+            && request.resource.data.decidedAt == request.time;
+          allow update, delete: if false;
+        }
       }
     }
 

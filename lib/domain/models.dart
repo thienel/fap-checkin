@@ -146,6 +146,32 @@ class CourseClassSummary {
       '$subject · $classCode${academicTerm == null ? '' : ' · $academicTerm'}';
 }
 
+class LeaveRequest {
+  const LeaveRequest({
+    required this.id,
+    required this.studentId,
+    required this.studentName,
+    required this.email,
+    required this.slot,
+    required this.date,
+    required this.reason,
+    required this.status,
+    required this.response,
+    required this.hasAttendanceConflict,
+  });
+
+  final String id;
+  final String studentId;
+  final String studentName;
+  final String email;
+  final int slot;
+  final String date;
+  final String reason;
+  final String status;
+  final String response;
+  final bool hasAttendanceConflict;
+}
+
 class RosterImportResult {
   const RosterImportResult({
     required this.totalRows,

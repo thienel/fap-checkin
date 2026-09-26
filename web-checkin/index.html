@@ -59,6 +59,22 @@
           </button>
         </form>
 
+        <section id="leave-panel" class="leave-panel hidden" aria-label="Xin phép nghỉ">
+          <p id="leave-account" class="field-help"></p>
+          <h2>Chọn buổi xin nghỉ</h2>
+          <form id="leave-form">
+            <div id="leave-slots" class="leave-slots"></div>
+            <label class="field-label" for="leave-reason">Lý do xin nghỉ</label>
+            <textarea id="leave-reason" minlength="10" maxlength="1000" rows="4" required></textarea>
+            <p class="field-help">Từ 10 đến 1000 ký tự. Đơn đã gửi không thể gửi lại cho cùng buổi.</p>
+            <button id="leave-submit" class="primary-button" type="submit">Gửi đơn xin nghỉ</button>
+          </form>
+          <h2>Trạng thái đơn</h2>
+          <div id="leave-history" aria-live="polite"></div>
+          <button id="leave-refresh" class="secondary-button" type="button">Tải lại trạng thái</button>
+          <button id="leave-switch-account" class="secondary-button" type="button">Đổi tài khoản Google</button>
+        </section>
+
         <p class="privacy">
           Hệ thống dùng email Google và mã xác nhận để điểm danh.
         </p>

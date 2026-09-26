@@ -139,6 +139,12 @@ URL check-in cố định:
 https://fap-checkin-c8c8d.web.app/check-in?t=<QR_TOKEN>
 ```
 
+### Xin phép nghỉ theo buổi
+
+Trong ứng dụng desktop, giảng viên mở **Yêu cầu nghỉ**, chọn môn–lớp và sao chép liên kết sinh viên. Sinh viên đăng nhập bằng email Google có trong roster, chọn một hoặc nhiều buổi tương lai và gửi lý do (10–1000 ký tự). Mỗi sinh viên chỉ gửi được một đơn cho mỗi buổi; trạng thái và phản hồi hiển thị lại trên cùng trang khi tải lại.
+
+Giảng viên lọc đơn chờ xử lý, duyệt hoặc từ chối kèm phản hồi. Quyết định và audit được ghi cùng một giao dịch, nên không thể duyệt lặp. Đơn đã duyệt chỉ tạo record `excused` khi buổi đó mở; nếu đã có điểm danh thực tế, hệ thống giữ nguyên record và cảnh báo xung đột trong hộp thư. Không cần tải tệp minh chứng ở phiên bản này.
+
 ## 6. Chạy desktop
 
 macOS:

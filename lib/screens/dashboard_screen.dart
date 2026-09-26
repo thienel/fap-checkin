@@ -15,6 +15,7 @@ import '../widgets/create_course_dialog.dart';
 import 'session_screen.dart';
 import 'roster_import_screen.dart';
 import 'class_overview_screen.dart';
+import 'leave_requests_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.api, required this.user});
@@ -32,6 +33,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _showWeek = false;
   bool _showRoster = false;
   bool _showOverview = false;
+  bool _showLeave = false;
   bool _movingScheduleSlot = false;
   late DateTime _weekStart;
 
@@ -63,9 +65,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _selectScheduleView(bool showWeek) {
-    if (!_showRoster && !_showOverview && _showWeek == showWeek) return;
+    if (!_showRoster &&
+        !_showOverview &&
+        !_showLeave &&
+        _showWeek == showWeek) {
+      return;
+    }
     _showRoster = false;
     _showOverview = false;
+    _showLeave = false;
     _showWeek = showWeek;
     if (showWeek) _weekStart = startOfWeek(DateTime.now());
     _refresh();
@@ -74,6 +82,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _openWeekSchedule() {
     _showRoster = false;
     _showOverview = false;
+    _showLeave = false;
     _showWeek = true;
     _weekStart = startOfWeek(DateTime.now());
     _refresh();
@@ -951,7 +960,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       icon: Icons.today_outlined,
                       label: 'Lịch hôm nay',
                       compact: compactNavigation,
-                      selected: !_showRoster && !_showOverview && !_showWeek,
+                      selected:
+                          !_showRoster &&
+                          !_showOverview &&
+                          !_showLeave &&
+                          !_showWeek,
                       onTap: () => _selectScheduleView(false),
                     ),
                     const SizedBox(height: 8),
@@ -959,7 +972,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       icon: Icons.date_range_outlined,
                       label: 'Lịch trong tuần',
                       compact: compactNavigation,
-                      selected: !_showRoster && !_showOverview && _showWeek,
+                      selected:
+                          !_showRoster &&
+                          !_showOverview &&
+                          !_showLeave &&
+                          _showWeek,
                       onTap: () => _selectScheduleView(true),
                     ),
                     const SizedBox(height: 8),
@@ -971,6 +988,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       onTap: () => setState(() {
                         _showOverview = true;
                         _showRoster = false;
+                        _showLeave = false;
                       }),
                     ),
                     const SizedBox(height: 8),
@@ -981,6 +999,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       selected: _showRoster,
                       onTap: () => setState(() {
                         _showRoster = true;
+                        _showOverview = false;
+                        _showLeave = false;
+                      }),
+                    ),
+                    const SizedBox(height: 8),
+                    _SideItem(
+                      icon: Icons.mark_email_unread_outlined,
+                      label: 'Yêu cầu nghỉ',
+                      compact: compactNavigation,
+                      selected: _showLeave,
+                      onTap: () => setState(() {
+                        _showLeave = true;
+                        _showRoster = false;
                         _showOverview = false;
                       }),
                     ),
@@ -1011,7 +1042,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ),
               Expanded(
-                child: _showOverview
+                child: _showLeave
+                    ? LeaveRequestsScreen(api: widget.api)
+                    : _showOverview
                     ? ClassOverviewScreen(
                         api: widget.api,
                         onOpenSchedule: _openWeekSchedule,

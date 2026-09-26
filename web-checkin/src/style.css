@@ -91,6 +91,16 @@ h1 { margin: 0; font-size: 30px; line-height: 1.16; letter-spacing: -.025em; }
 .checkout-form input:focus { border-color: #2b7489; box-shadow: 0 0 0 3px rgba(43, 116, 137, .14); }
 .checkout-form input[aria-invalid="true"] { border-color: #a42a2a; }
 .checkout-form .primary-button { margin-top: 3px; color: white; border-color: #164e63; background: #164e63; }
+.leave-panel { text-align: left; }
+.leave-panel h2 { margin: 24px 0 12px; font-size: 18px; }
+.leave-panel form { display: grid; gap: 12px; }
+.leave-slots { display: grid; gap: 8px; max-height: 220px; overflow-y: auto; }
+.leave-choice { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #d6e3e7; border-radius: 10px; }
+.leave-choice:has(input:disabled) { opacity: .6; }
+.leave-panel textarea { width: 100%; padding: 12px; border: 1px solid #c9d9de; border-radius: 10px; font: inherit; resize: vertical; }
+.leave-panel textarea:focus { outline: 3px solid rgba(43, 116, 137, .14); border-color: #2b7489; }
+.leave-panel .primary-button { color: white; border-color: #164e63; background: #164e63; }
+#leave-history p { padding: 10px; border-bottom: 1px solid #e1ebed; }
 .secondary-button { min-height: 42px; border: 0; color: #164e63; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
 .secondary-button:hover { text-decoration: underline; }
 .secondary-button:disabled { opacity: .6; cursor: wait; }

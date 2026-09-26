@@ -37,6 +37,7 @@ const codeError = document.querySelector('#code-error');
 const checkoutSubmitButton = document.querySelector('#checkout-submit');
 const switchAccountButton = document.querySelector('#switch-account');
 const params = new URLSearchParams(window.location.search);
+const leaveClassId = params.get('leave');
 const urlToken = params.get('t');
 if (urlToken) sessionStorage.setItem('attendanceQrToken', urlToken);
 const token = urlToken || sessionStorage.getItem('attendanceQrToken');
@@ -359,7 +360,14 @@ async function bootstrap() {
   });
 }
 
-bootstrap().catch((error) => {
-  console.error(error);
-  showStatus('error', 'Lỗi khởi tạo', 'Không thể kết nối tới hệ thống điểm danh.');
-});
+if (leaveClassId) {
+  import('./leave.js').then(({ startLeave }) => startLeave(firebaseConfig, leaveClassId)).catch((error) => {
+    console.error(error);
+    showStatus('error', 'Không thể mở trang xin nghỉ', 'Vui lòng thử lại hoặc liên hệ giảng viên.');
+  });
+} else {
+  bootstrap().catch((error) => {
+    console.error(error);
+    showStatus('error', 'Lỗi khởi tạo', 'Không thể kết nối tới hệ thống điểm danh.');
+  });
+}

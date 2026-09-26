@@ -191,6 +191,87 @@ test('Google student can read only their own roster profile', async () => {
   await assertFails(getDocs(students));
 });
 
+test('only a roster member can submit leave and only the teacher can decide once', async () => {
+  const leaveCourseId = 'LEAVE_TEST';
+  const date = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    const admin = context.firestore();
+    await setDoc(doc(admin, 'courseClasses', leaveCourseId), {
+      ownerUid: teacherUid, subject: 'PRM393', classCode: 'LEAVE',
+      schedule: [{ number: 1, date, daySlot: 1 }],
+    });
+    await setDoc(doc(admin, 'courseClasses', leaveCourseId, 'students', 'student-hash-1'), {
+      emailNormalized: 'student1@fpt.edu.vn', email: 'student1@fpt.edu.vn',
+      studentCode: 'SE001', fullName: 'Student One', active: true,
+      attendancePolicy: 'normal',
+    });
+  });
+  const studentDb = testEnvironment.authenticatedContext(studentUid, {
+    email: 'student1@fpt.edu.vn', firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const strangerDb = testEnvironment.authenticatedContext('other-student', {
+    email: 'stranger@fpt.edu.vn', firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const teacherDb = testEnvironment.authenticatedContext(teacherUid).firestore();
+  const course = doc(studentDb, 'courseClasses', leaveCourseId);
+  await assertFails(getDoc(course));
+  await assertSucceeds(getDoc(doc(studentDb, 'courseClasses', leaveCourseId, 'students', 'student-hash-1')));
+  await assertSucceeds(setDoc(doc(studentDb, 'courseClasses', leaveCourseId, 'studentAccess', studentUid), {
+    studentId: 'student-hash-1', emailNormalized: 'student1@fpt.edu.vn', createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(course));
+  await assertFails(setDoc(doc(strangerDb, 'courseClasses', leaveCourseId, 'studentAccess', 'other-student'), {
+    studentId: 'student-hash-1', emailNormalized: 'stranger@fpt.edu.vn', createdAt: serverTimestamp(),
+  }));
+  const requestPath = ['courseClasses', leaveCourseId, 'leaveRequests', 'student-hash-1_1'];
+  const request = doc(studentDb, ...requestPath);
+  await assertFails(setDoc(request, {
+    ownerUid: teacherUid, courseClassId: leaveCourseId, studentId: 'student-hash-1',
+    firebaseUid: studentUid, emailNormalized: 'student1@fpt.edu.vn',
+    slot: 1, date, slotDate: new Date(Date.parse(`${date}T00:00:00Z`) + 86400000),
+    reason: 'Em xin nghỉ vì việc gia đình.', status: 'pending', createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(request, {
+    ownerUid: teacherUid, courseClassId: leaveCourseId, studentId: 'student-hash-1',
+    firebaseUid: studentUid, emailNormalized: 'student1@fpt.edu.vn',
+    slot: 1, date, slotDate: new Date(`${date}T00:00:00Z`),
+    reason: 'Em xin nghỉ vì việc gia đình.', status: 'pending', createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(studentDb, 'courseClasses', leaveCourseId, 'leaveRequests', 'forged-slot'), {
+    ownerUid: teacherUid, courseClassId: leaveCourseId, studentId: 'student-hash-1',
+    firebaseUid: studentUid, emailNormalized: 'student1@fpt.edu.vn',
+    slot: 1, date, slotDate: new Date(`${date}T00:00:00Z`),
+    reason: 'Em xin nghỉ vì việc gia đình.', status: 'pending', createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(studentDb, 'courseClasses', leaveCourseId, 'leaveRequests', 'student-hash-1_2'), {
+    ownerUid: teacherUid, courseClassId: leaveCourseId, studentId: 'student-hash-1',
+    firebaseUid: studentUid, emailNormalized: 'student1@fpt.edu.vn',
+    slot: 2, date, slotDate: new Date(`${date}T00:00:00Z`),
+    reason: 'Em xin nghỉ vì việc gia đình.', status: 'pending', createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(strangerDb, ...requestPath)));
+  await assertFails(updateDoc(request, { status: 'approved' }));
+  const teacherRequest = doc(teacherDb, ...requestPath);
+  await assertFails(updateDoc(teacherRequest, {
+    status: 'approved', response: 'Đã duyệt', decidedBy: teacherUid,
+    decidedAt: serverTimestamp(),
+  }));
+  const decision = writeBatch(teacherDb);
+  decision.update(teacherRequest, {
+    status: 'approved', response: 'Đã duyệt', decidedBy: teacherUid,
+    decidedAt: serverTimestamp(),
+  });
+  decision.set(doc(teacherRequest, 'audit', 'decision'), {
+    from: 'pending', to: 'approved', response: 'Đã duyệt',
+    actorUid: teacherUid, decidedAt: serverTimestamp(),
+  });
+  await assertSucceeds(decision.commit());
+  await assertFails(updateDoc(teacherRequest, {
+    status: 'rejected', response: 'Đổi ý', decidedBy: teacherUid,
+    decidedAt: serverTimestamp(),
+  }));
+});
+
 test('course owner can read and list roster, another teacher cannot', async () => {
   const ownerDb = testEnvironment.authenticatedContext(teacherUid).firestore();
   const otherDb = testEnvironment.authenticatedContext(otherTeacherUid).firestore();

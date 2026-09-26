@@ -53,6 +53,135 @@ class AttendanceApi {
     return classes;
   });
 
+  String leaveRequestUrl(String courseClassId) =>
+      Uri.parse(DesktopFirebaseOptions.publicWebUrl)
+          .replace(queryParameters: {'leave': courseClassId})
+          .toString();
+
+  Future<List<LeaveRequest>> getLeaveRequests(
+    String courseClassId,
+  ) => _guard(() async {
+    final uid = _teacherUid();
+    final course = _firestore.collection('courseClasses').doc(courseClassId);
+    final courseSnapshot = await course.get();
+    if (!courseSnapshot.exists || courseSnapshot.data()?['ownerUid'] != uid) {
+      throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+    }
+    final snapshot = await course.collection('leaveRequests').get();
+    final requests = await Future.wait(
+      snapshot.docs.map((request) async {
+        final data = request.data();
+        final studentId = data['studentId'] as String? ?? '';
+        final slot = (data['slot'] as num?)?.toInt() ?? 0;
+        final student = await course
+            .collection('students')
+            .doc(studentId)
+            .get();
+        var conflict = false;
+        if (data['status'] == 'approved') {
+          final slotRef = _firestore
+              .collection('attendance')
+              .doc(courseClassId)
+              .collection('slots')
+              .doc('$slot');
+          final record = await slotRef
+              .collection('records')
+              .doc(studentId)
+              .get();
+          conflict =
+              record.exists && record.data()?['attendanceStatus'] != 'excused';
+          if (!record.exists) {
+            final legacy = await slotRef
+                .collection('checkIns')
+                .where('studentId', isEqualTo: studentId)
+                .limit(1)
+                .get();
+            conflict = legacy.docs.isNotEmpty;
+          }
+        }
+        return LeaveRequest(
+          id: request.id,
+          studentId: studentId,
+          studentName: student.data()?['fullName'] as String? ?? studentId,
+          email: data['emailNormalized'] as String? ?? '',
+          slot: slot,
+          date: data['date'] as String? ?? '',
+          reason: data['reason'] as String? ?? '',
+          status: data['status'] as String? ?? 'pending',
+          response: data['response'] as String? ?? '',
+          hasAttendanceConflict: conflict,
+        );
+      }),
+    );
+    requests.sort((a, b) {
+      final status = (a.status == 'pending' ? 0 : 1).compareTo(
+        b.status == 'pending' ? 0 : 1,
+      );
+      if (status != 0) return status;
+      return a.date.compareTo(b.date);
+    });
+    return requests;
+  });
+
+  Future<void> decideLeaveRequest({
+    required String courseClassId,
+    required String requestId,
+    required bool approve,
+    required String response,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    final answer = response.trim();
+    if (answer.isEmpty || answer.length > 1000) {
+      throw const AttendanceApiException('Phản hồi cần từ 1 đến 1000 ký tự.');
+    }
+    final course = _firestore.collection('courseClasses').doc(courseClassId);
+    final request = course.collection('leaveRequests').doc(requestId);
+    final audit = request.collection('audit').doc('decision');
+    final decision = approve ? 'approved' : 'rejected';
+    await _firestore.runTransaction((transaction) async {
+      final courseDoc = await transaction.get(course);
+      final requestDoc = await transaction.get(request);
+      final auditDoc = await transaction.get(audit);
+      if (!courseDoc.exists || courseDoc.data()?['ownerUid'] != uid) {
+        throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+      }
+      if (!requestDoc.exists ||
+          requestDoc.data()?['status'] != 'pending' ||
+          auditDoc.exists) {
+        throw const AttendanceApiException(
+          'Đơn đã được xử lý hoặc không còn tồn tại.',
+        );
+      }
+      transaction.update(request, {
+        'status': decision,
+        'response': answer,
+        'decidedBy': uid,
+        'decidedAt': FieldValue.serverTimestamp(),
+      });
+      transaction.set(audit, {
+        'from': 'pending',
+        'to': decision,
+        'response': answer,
+        'actorUid': uid,
+        'decidedAt': FieldValue.serverTimestamp(),
+      });
+    });
+    if (approve) {
+      final active = await getActiveAttendance();
+      if (active != null && active.courseClassId == courseClassId) {
+        await _materializeApprovedLeave(
+          sessionId: active.id,
+          courseClassId: courseClassId,
+          subject: active.subject,
+          classCode: active.classCode,
+          slot: active.slot,
+          date: active.date,
+          ownerUid: uid,
+        );
+      }
+    }
+  });
+
   Future<CourseOverview> getCourseOverview(
     String courseClassId,
   ) => _guard(() async {
@@ -1219,6 +1348,15 @@ class AttendanceApi {
       date: session.date,
       ownerUid: _teacherUid(),
     );
+    await _materializeApprovedLeave(
+      sessionId: session.id,
+      courseClassId: session.courseClassId,
+      subject: session.subject,
+      classCode: session.classCode,
+      slot: session.slot,
+      date: session.date,
+      ownerUid: _teacherUid(),
+    );
     return session;
   });
 
@@ -1317,6 +1455,15 @@ class AttendanceApi {
     });
 
     await _materializeAlwaysExcused(
+      sessionId: sessionReference.id,
+      courseClassId: slot.courseClassId,
+      subject: sessionData['subject'] as String,
+      classCode: sessionData['classCode'] as String,
+      slot: slot.slot,
+      date: sessionData['date'] as String,
+      ownerUid: uid,
+    );
+    await _materializeApprovedLeave(
       sessionId: sessionReference.id,
       courseClassId: slot.courseClassId,
       subject: sessionData['subject'] as String,
@@ -2014,6 +2161,77 @@ class AttendanceApi {
       } on Object catch (error) {
         return error.toString();
       }
+    }
+  }
+
+  Future<void> _materializeApprovedLeave({
+    required String sessionId,
+    required String courseClassId,
+    required String subject,
+    required String classCode,
+    required int slot,
+    required String date,
+    required String ownerUid,
+  }) async {
+    final course = _firestore.collection('courseClasses').doc(courseClassId);
+    final approved = await course
+        .collection('leaveRequests')
+        .where('slot', isEqualTo: slot)
+        .get();
+    for (final request in approved.docs) {
+      final data = request.data();
+      if (data['status'] != 'approved' || data['date'] != date) continue;
+      final studentId = data['studentId'] as String?;
+      if (studentId == null) continue;
+      final slotReference = _firestore
+          .collection('attendance')
+          .doc(courseClassId)
+          .collection('slots')
+          .doc('$slot');
+      final legacy = await slotReference
+          .collection('checkIns')
+          .where('studentId', isEqualTo: studentId)
+          .limit(1)
+          .get();
+      if (legacy.docs.isNotEmpty) continue;
+      final studentReference = course.collection('students').doc(studentId);
+      final recordReference = slotReference
+          .collection('records')
+          .doc(studentId);
+      await _firestore.runTransaction((transaction) async {
+        final current = await transaction.get(recordReference);
+        final student = await transaction.get(studentReference);
+        if (current.exists ||
+            !student.exists ||
+            student.data()?['active'] != true) {
+          return;
+        }
+        final profile = student.data()!;
+        transaction.set(recordReference, {
+          'ownerUid': ownerUid,
+          'studentId': studentId,
+          'email': profile['email'],
+          'emailNormalized': profile['emailNormalized'],
+          'studentCode': profile['studentCode'],
+          'fullName': profile['fullName'],
+          'sessionId': sessionId,
+          'courseClassId': courseClassId,
+          'subject': subject,
+          'classCode': classCode,
+          'slot': slot,
+          'slotKey': '$slot',
+          'date': date,
+          'attendanceStatus': 'excused',
+          'recordSource': 'policy',
+          'reason': 'Đơn xin nghỉ đã duyệt: ${data['reason']}',
+          'leaveRequestId': request.id,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedBy': ownerUid,
+          'syncStatus': 'pending',
+          'revision': 1,
+        });
+      });
     }
   }
 
