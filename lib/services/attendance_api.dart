@@ -87,12 +87,13 @@ class AttendanceApi {
     final sessionSnapshot = await _firestore
         .collection('attendanceSessions')
         .where('ownerUid', isEqualTo: uid)
+        .where('courseClassId', isEqualTo: courseClassId)
         .get();
     final sessionsBySlot =
         <int, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
     for (final session in sessionSnapshot.docs) {
       final data = session.data();
-      if (data['courseClassId'] != courseClassId || data['slot'] is! num) {
+      if (data['slot'] is! num) {
         continue;
       }
       sessionsBySlot
@@ -109,7 +110,9 @@ class AttendanceApi {
     final recordSnapshots = <int, QuerySnapshot<Map<String, dynamic>>>{};
     final legacySnapshots = <int, QuerySnapshot<Map<String, dynamic>>>{};
     await Future.wait([
-      for (final item in schedule)
+      for (final item in schedule.where(
+        (item) => sessionsBySlot.containsKey((item['number'] as num).toInt()),
+      ))
         (() async {
           final number = (item['number'] as num).toInt();
           final slotReference = _firestore
@@ -192,19 +195,122 @@ class AttendanceApi {
     required String courseClassId,
     required String studentId,
   }) => _guard(() async {
-    final overview = await getCourseOverview(courseClassId);
-    CourseStudent? student;
-    for (final item in overview.students) {
-      if (item.id == studentId) {
-        student = item;
-        break;
-      }
+    final uid = _teacherUid();
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final courseDocument = await courseReference.get();
+    final course = courseDocument.data();
+    if (course == null || course['ownerUid'] != uid) {
+      throw const AttendanceApiException('Không tìm thấy môn–lớp.');
     }
-    if (student == null) {
+    final studentDocument = await courseReference
+        .collection('students')
+        .doc(studentId)
+        .get();
+    final data = studentDocument.data();
+    if (data == null) {
       throw const AttendanceApiException(
         'Không tìm thấy sinh viên trong danh sách lớp.',
       );
     }
+    final student = CourseStudent(
+      id: studentId,
+      email: data['email'] as String? ?? '',
+      studentCode: data['studentCode'] as String? ?? '',
+      fullName: data['fullName'] as String? ?? '',
+      active: data['active'] as bool? ?? true,
+      attendancePolicy: data['attendancePolicy'] == 'alwaysExcused'
+          ? AttendancePolicy.alwaysExcused
+          : AttendancePolicy.normal,
+    );
+    final sessions = await _firestore
+        .collection('attendanceSessions')
+        .where('ownerUid', isEqualTo: uid)
+        .where('courseClassId', isEqualTo: courseClassId)
+        .get();
+    final sessionsBySlot =
+        <int, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+    for (final session in sessions.docs) {
+      final slot = (session.data()['slot'] as num?)?.toInt();
+      if (slot != null) sessionsBySlot.putIfAbsent(slot, () => []).add(session);
+    }
+    final rawSchedule = course['schedule'];
+    final schedule = rawSchedule is List
+        ? rawSchedule.whereType<Map>().map(Map<String, dynamic>.from).toList()
+        : <Map<String, dynamic>>[];
+    schedule.sort((a, b) => (a['number'] as num).compareTo(b['number'] as num));
+    final slots = <CourseSlotOverview>[];
+    final entries = <String, AttendanceEntry>{};
+    final openedNumbers = <int>[];
+    for (final item in schedule) {
+      final number = (item['number'] as num).toInt();
+      final slotSessions = sessionsBySlot[number] ?? const [];
+      final active = slotSessions.any(
+        (session) => session.data()['status'] == 'active',
+      );
+      slots.add(
+        CourseSlotOverview(
+          number: number,
+          date: item['date'] as String? ?? '',
+          daySlot: (item['daySlot'] as num?)?.toInt(),
+          state: active
+              ? CourseSlotState.active
+              : slotSessions.isEmpty
+              ? CourseSlotState.notOpened
+              : CourseSlotState.completed,
+          sessionIds: slotSessions.map((session) => session.id).toList(),
+        ),
+      );
+      if (slotSessions.isNotEmpty) openedNumbers.add(number);
+    }
+    for (var start = 0; start < openedNumbers.length; start += 4) {
+      final chunk = openedNumbers.skip(start).take(4);
+      await Future.wait(
+        chunk.map((number) async {
+          final slotReference = _firestore
+              .collection('attendance')
+              .doc(courseClassId)
+              .collection('slots')
+              .doc('$number');
+          final canonical = await slotReference
+              .collection('records')
+              .doc(studentId)
+              .get();
+          Map<String, dynamic>? record = canonical.data();
+          if (record == null) {
+            final legacy = await slotReference
+                .collection('checkIns')
+                .where('ownerUid', isEqualTo: uid)
+                .where('studentId', isEqualTo: studentId)
+                .limit(1)
+                .get();
+            if (legacy.docs.isNotEmpty) record = legacy.docs.first.data();
+          }
+          if (record != null) {
+            entries[attendanceEntryKey(studentId, number)] = AttendanceEntry(
+              studentId: studentId,
+              slot: number,
+              status: switch (record['attendanceStatus']) {
+                'excused' => AttendanceStatus.excused,
+                'absent' => AttendanceStatus.absent,
+                _ => AttendanceStatus.present,
+              },
+              source: record['recordSource'] as String? ?? 'qr',
+              syncStatus: record['syncStatus'] as String? ?? 'pending',
+            );
+          }
+        }),
+      );
+    }
+    final overview = CourseOverview(
+      courseClassId: courseClassId,
+      subject: course['subject'] as String? ?? '',
+      classCode: course['classCode'] as String? ?? '',
+      students: [student],
+      slots: slots,
+      entries: entries,
+    );
     return StudentAttendanceDetail(
       student: student,
       attendedSlots: overview.attendedCount(student),
@@ -1323,6 +1429,7 @@ class AttendanceApi {
     required String studentId,
     required AttendanceStatus status,
     required String reason,
+    bool deferSheetSort = false,
   }) => _guard(() async {
     if (status == AttendanceStatus.notYetOpen ||
         status == AttendanceStatus.pending) {
@@ -1440,7 +1547,7 @@ class AttendanceApi {
     }
     try {
       final updated = await recordReference.get();
-      final syncError = await _syncDocument(updated);
+      final syncError = await _syncDocument(updated, deferSort: deferSheetSort);
       return AttendanceAdjustmentResult(
         synced: syncError == null,
         syncError: syncError,
@@ -1465,9 +1572,9 @@ class AttendanceApi {
     var syncedCount = 0;
     final ids = studentIds.toList();
 
-    // Xử lý theo chunks 400 để tránh timeout và cung cấp tiến độ rõ ràng.
-    for (var start = 0; start < ids.length; start += 400) {
-      final end = min(start + 400, ids.length);
+    // Giới hạn số transaction và request Apps Script đồng thời.
+    for (var start = 0; start < ids.length; start += 4) {
+      final end = min(start + 4, ids.length);
       final chunk = ids.sublist(start, end);
       await Future.wait(
         chunk.map((studentId) async {
@@ -1478,6 +1585,7 @@ class AttendanceApi {
               studentId: studentId,
               status: status,
               reason: reason,
+              deferSheetSort: true,
             );
             if (result.synced) {
               syncedCount++;
@@ -1492,10 +1600,30 @@ class AttendanceApi {
         }),
       );
     }
+    String? sortWarning;
+    if (syncedCount > 0 && _sheets.isConfigured) {
+      try {
+        final course = await _firestore
+            .collection('courseClasses')
+            .doc(courseClassId)
+            .get();
+        final data = course.data();
+        if (data != null) {
+          await _sheets.sort(
+            subject: data['subject'] as String,
+            classCode: data['classCode'] as String,
+            courseClassId: courseClassId,
+          );
+        }
+      } on Object catch (error) {
+        sortWarning = error.toString();
+      }
+    }
     return BulkAttendanceResult(
       syncedCount: syncedCount,
       pendingSync: pendingSync,
       failures: failures,
+      sortWarning: sortWarning,
     );
   }
 
@@ -1768,24 +1896,27 @@ class AttendanceApi {
   }
 
   Future<String?> _syncDocument(
-    DocumentSnapshot<Map<String, dynamic>> document,
-  ) {
+    DocumentSnapshot<Map<String, dynamic>> document, {
+    bool deferSort = false,
+  }) {
     final path = document.reference.path;
     final active = _syncingRecords[path];
     if (active != null) return active;
     late final Future<String?> operation;
-    operation = _performSyncDocument(document).whenComplete(() {
-      if (identical(_syncingRecords[path], operation)) {
-        _syncingRecords.remove(path);
-      }
-    });
+    operation = _performSyncDocument(document, deferSort: deferSort)
+        .whenComplete(() {
+          if (identical(_syncingRecords[path], operation)) {
+            _syncingRecords.remove(path);
+          }
+        });
     _syncingRecords[path] = operation;
     return operation;
   }
 
   Future<String?> _performSyncDocument(
-    DocumentSnapshot<Map<String, dynamic>> document,
-  ) async {
+    DocumentSnapshot<Map<String, dynamic>> document, {
+    bool deferSort = false,
+  }) async {
     final reference = document.reference;
     DocumentSnapshot<Map<String, dynamic>> current;
     try {
@@ -1816,6 +1947,7 @@ class AttendanceApi {
           attendanceStatus: data['attendanceStatus'] as String? ?? 'present',
           recordSource: data['recordSource'] as String? ?? 'qr',
           reason: data['reason'] as String?,
+          deferSort: deferSort,
         );
         final changed = await _firestore.runTransaction((transaction) async {
           final latest = await transaction.get(reference);
@@ -2123,11 +2255,13 @@ class BulkAttendanceResult {
     required this.syncedCount,
     required this.pendingSync,
     required this.failures,
+    this.sortWarning,
   });
 
   final int syncedCount;
   final Map<String, String> pendingSync;
   final Map<String, String> failures;
+  final String? sortWarning;
 
   int get savedCount => syncedCount + pendingSync.length;
 }

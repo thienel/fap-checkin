@@ -32,6 +32,7 @@ class AppsScriptSheetService {
     required String attendanceStatus,
     required String recordSource,
     String? reason,
+    bool deferSort = false,
   }) async {
     await _requireInstanceSheets(courseClassId, subject, classCode);
     final payload = <String, Object>{
@@ -50,6 +51,7 @@ class AppsScriptSheetService {
           : {'checkedInAt': checkedInAt.toUtc().toIso8601String()}),
       'attendanceStatus': attendanceStatus,
       'recordSource': recordSource,
+      if (deferSort) 'deferSort': true,
       ...?(reason == null ? null : {'reason': reason}),
     };
     final result = await _post(payload);

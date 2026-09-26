@@ -1,6 +1,22 @@
 {
   "indexes": [
     {
+      "collectionGroup": "attendanceSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "ownerUid", "order": "ASCENDING"},
+        {"fieldPath": "courseClassId", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "checkIns",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "ownerUid", "order": "ASCENDING"},
+        {"fieldPath": "studentId", "order": "ASCENDING"}
+      ]
+    },
+    {
       "collectionGroup": "checkIns",
       "queryScope": "COLLECTION_GROUP",
       "fields": [

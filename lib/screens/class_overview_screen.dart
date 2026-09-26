@@ -277,6 +277,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                   Text('Đã đồng bộ Sheets: ${result.syncedCount}'),
                   Text('Đã lưu, chờ Sheets: ${result.pendingSync.length}'),
                   Text('Chưa lưu: ${result.failures.length}'),
+                  if (result.sortWarning != null)
+                    Text('Chưa sắp xếp được Sheets: ${result.sortWarning}'),
                   if (result.failures.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     for (final entry in result.failures.entries)

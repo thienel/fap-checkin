@@ -35,6 +35,7 @@ void main() {
       attendanceStatus: 'excused',
       recordSource: 'teacher',
       reason: 'Có giấy xác nhận',
+      deferSort: true,
     );
 
     expect(payload?['action'], 'upsert');
@@ -43,6 +44,7 @@ void main() {
     expect(payload?['recordSource'], 'teacher');
     expect(payload?['courseClassId'], 'instance-a');
     expect(payload?['reason'], 'Có giấy xác nhận');
+    expect(payload?['deferSort'], isTrue);
     expect(payload?.containsKey('checkedInAt'), isFalse);
   });
 

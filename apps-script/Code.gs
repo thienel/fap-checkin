@@ -107,7 +107,7 @@ function upsertAttendance(spreadsheetId, payload) {
     } else {
       sheet.appendRow(row);
     }
-    sortSheet(sheet);
+    if (payload.deferSort !== true) sortSheet(sheet);
     return revision;
   } finally {
     lock.releaseLock();

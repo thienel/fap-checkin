@@ -5,6 +5,7 @@ const vm = require('node:vm');
 
 test('an older request cannot replace a newer Sheets revision', () => {
   const rows = [];
+  let sortCount = 0;
   const headers = [
     'Slot', 'Date', 'Check-in time', 'Email', 'Status', 'Source', 'Reason',
     'Session ID', 'Updated at', 'Record ID', 'Revision',
@@ -29,7 +30,7 @@ test('an older request cannot replace a newer Sheets revision', () => {
             },
           };
         },
-        sort() {},
+        sort() { sortCount++; },
       };
     },
     appendRow(row) { rows.push(row); },
@@ -46,16 +47,27 @@ test('an older request cannot replace a newer Sheets revision', () => {
     subject: 'PRM393', classCode: 'SE1917', recordId: 'record-1', slot: 1,
     date: '2026-09-26', email: 'student@fpt.edu.vn', sessionId: 'session-1',
     attendanceStatus: 'absent', recordSource: 'teacher', revision: 2,
+    deferSort: true,
   };
   assert.equal(sandbox.upsertAttendance('spreadsheet-1', payload), 2);
   assert.equal(rows[0][4], 'absent');
   assert.equal(rows[0][10], 2);
+  assert.equal(sortCount, 0);
 
   assert.throws(() => sandbox.upsertAttendance('spreadsheet-1', {
     ...payload, attendanceStatus: 'present', revision: 1,
   }), /revision mới hơn/);
   assert.equal(rows[0][4], 'absent');
   assert.equal(rows[0][10], 2);
+  assert.equal(sortCount, 0);
+  assert.equal(sandbox.upsertAttendance('spreadsheet-1', {
+    ...payload, revision: 3, deferSort: false,
+  }), 3);
+  assert.equal(sortCount, 0);
+  sandbox.upsertAttendance('spreadsheet-1', {
+    ...payload, recordId: 'record-2', revision: 1, deferSort: false,
+  });
+  assert.equal(sortCount, 1);
 });
 
 test('new course instances use separate sheets while legacy IDs keep their tabs', () => {
