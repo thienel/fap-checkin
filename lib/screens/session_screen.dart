@@ -54,8 +54,10 @@ class _SessionScreenState extends State<SessionScreen> {
   bool _issuing = false;
   bool _rotatingCheckoutCode = false;
   bool _stopping = false;
+  bool _stopCompleted = false;
   bool _retryingSync = false;
   String? _error;
+  String? _stopError;
   String? _checkoutError;
 
   String _searchQuery = '';
@@ -214,20 +216,55 @@ class _SessionScreenState extends State<SessionScreen> {
 
     if (confirmed != true) return;
 
-    setState(() => _stopping = true);
-    _rotationTimer?.cancel();
-    _countdownTimer?.cancel();
-    _checkoutRetryTimer?.cancel();
+    setState(() {
+      _stopping = true;
+      _stopError = null;
+    });
     try {
-      await widget.api.stopAttendance(widget.session.id);
-      if (mounted) Navigator.of(context).pop();
+      final warnings = await widget.api.stopAttendance(widget.session.id);
+      if (!mounted) return;
+      _finishStop(warnings);
     } catch (error) {
+      if (!mounted) return;
+      var stopError = 'Không thể ngừng phiên: $error';
+      try {
+        if (!await widget.api.isAttendanceActive(widget.session.id)) {
+          if (mounted) {
+            _finishStop([
+              'Phiên đã đóng nhưng chưa xác minh được bước dọn dẹp: $error',
+            ]);
+          }
+          return;
+        }
+      } catch (verificationError) {
+        if (!mounted) return;
+        stopError = 'Không xác minh được trạng thái phiên: $verificationError';
+      }
       if (!mounted) return;
       setState(() {
         _stopping = false;
-        _error = 'Không thể ngừng phiên: $error';
+        _stopError = stopError;
       });
+      unawaited(_issueQr());
+      if (_checkoutSecondsLeftNotifier.value == 0) {
+        unawaited(_rotateCheckoutCode());
+      }
     }
+  }
+
+  void _finishStop(List<String> warnings) {
+    _rotationTimer?.cancel();
+    _countdownTimer?.cancel();
+    _checkoutRetryTimer?.cancel();
+    if (warnings.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã ngừng phiên. ${warnings.join(' ')}')),
+      );
+    }
+    setState(() => _stopCompleted = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   Future<void> _retrySheetSync() async {
@@ -549,7 +586,7 @@ class _SessionScreenState extends State<SessionScreen> {
   Widget build(BuildContext context) {
     final session = widget.session;
     return PopScope(
-      canPop: false,
+      canPop: _stopCompleted,
       child: Scaffold(
         backgroundColor: AppColors.canvas,
         appBar: AppBar(
@@ -787,7 +824,7 @@ class _SessionScreenState extends State<SessionScreen> {
                     color: AppColors.textMuted,
                   ),
                 ),
-                if (_error != null) ...[
+                if (_error != null || _stopError != null) ...[
                   const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.all(10),
@@ -796,7 +833,7 @@ class _SessionScreenState extends State<SessionScreen> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      _error!,
+                      _stopError ?? _error!,
                       style: const TextStyle(
                         fontSize: 12,
                         color: AppColors.error,

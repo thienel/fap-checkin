@@ -309,7 +309,7 @@ class AttendanceApi {
     // Ghi student document + studentCodeClaim atomically trong cùng batch.
     await commitChunks([
       for (final row in validRows)
-        ...((){
+        ...(() {
           final studentId = sha256
               .convert(utf8.encode(row.emailNormalized))
               .toString();
@@ -395,7 +395,9 @@ class AttendanceApi {
       }
       final claimedStudentId = codeClaim.data()?['studentId'] as String?;
       if (codeClaim.exists && claimedStudentId != studentId) {
-        throw const AttendanceApiException('Mã sinh viên đã được sử dụng trong lớp.');
+        throw const AttendanceApiException(
+          'Mã sinh viên đã được sử dụng trong lớp.',
+        );
       }
 
       transaction.set(studentReference, {
@@ -434,7 +436,9 @@ class AttendanceApi {
       );
     }
     if (normalizedName.isEmpty || normalizedName.length > 120) {
-      throw const AttendanceApiException('Họ tên không được để trống và tối đa 120 ký tự.');
+      throw const AttendanceApiException(
+        'Họ tên không được để trống và tối đa 120 ký tự.',
+      );
     }
 
     final courseReference = _firestore
@@ -453,7 +457,9 @@ class AttendanceApi {
           course.data()?['ownerUid'] != uid ||
           !student.exists ||
           student.data() == null) {
-        throw const AttendanceApiException('Không tìm thấy sinh viên trong lớp.');
+        throw const AttendanceApiException(
+          'Không tìm thấy sinh viên trong lớp.',
+        );
       }
 
       final studentData = student.data()!;
@@ -472,7 +478,9 @@ class AttendanceApi {
       final newClaim = await transaction.get(newClaimReference);
       final claimedStudentId = newClaim.data()?['studentId'] as String?;
       if (newClaim.exists && claimedStudentId != studentId) {
-        throw const AttendanceApiException('Mã sinh viên đã được sử dụng trong lớp.');
+        throw const AttendanceApiException(
+          'Mã sinh viên đã được sử dụng trong lớp.',
+        );
       }
 
       transaction.update(studentReference, {
@@ -519,7 +527,9 @@ class AttendanceApi {
           course.data()?['ownerUid'] != uid ||
           !student.exists ||
           student.data() == null) {
-        throw const AttendanceApiException('Không tìm thấy sinh viên trong lớp.');
+        throw const AttendanceApiException(
+          'Không tìm thấy sinh viên trong lớp.',
+        );
       }
       transaction.update(studentReference, {
         'active': active,
@@ -549,8 +559,7 @@ class AttendanceApi {
     // Lock ID: {ownerUid}_{date}_{daySlot} để prevent concurrent creation
     // của hai lớp chiếm cùng khung giờ của cùng giảng viên.
     final lockIds = [
-      for (final item in schedule)
-        '${uid}_${_isoDate(item.date)}_$daySlot',
+      for (final item in schedule) '${uid}_${_isoDate(item.date)}_$daySlot',
     ];
     final lockRefs = [
       for (final lockId in lockIds)
@@ -1102,9 +1111,7 @@ class AttendanceApi {
       date: sessionData['date'] as String,
       ownerUid: uid,
     );
-    final currentCheckoutCode = await rotateCheckoutCode(
-      sessionReference.id,
-    );
+    final currentCheckoutCode = await rotateCheckoutCode(sessionReference.id);
 
     return AttendanceSession.fromMap({
       ...sessionData,
@@ -1117,61 +1124,58 @@ class AttendanceApi {
     });
   });
 
-  Future<RotatedCheckoutCode> rotateCheckoutCode(
-    String sessionId,
-  ) => _guard(() async {
-    final uid = _teacherUid();
-    final sessionReference = _firestore
-        .collection('attendanceSessions')
-        .doc(sessionId);
-    final checkoutReference = _firestore
-        .collection('attendanceCheckoutCodes')
-        .doc(sessionId);
-    late String nextCode;
+  Future<RotatedCheckoutCode> rotateCheckoutCode(String sessionId) => _guard(
+    () async {
+      final uid = _teacherUid();
+      final sessionReference = _firestore
+          .collection('attendanceSessions')
+          .doc(sessionId);
+      final checkoutReference = _firestore
+          .collection('attendanceCheckoutCodes')
+          .doc(sessionId);
+      late String nextCode;
 
-    await _firestore.runTransaction((transaction) async {
-      final session = await transaction.get(sessionReference);
-      final checkout = await transaction.get(checkoutReference);
-      final sessionData = session.data();
-      final checkoutData = checkout.data();
-      if (!session.exists ||
-          sessionData == null ||
-          sessionData['ownerUid'] != uid ||
-          sessionData['status'] != 'active' ||
-          !checkout.exists ||
-          checkoutData == null ||
-          checkoutData['ownerUid'] != uid ||
-          checkoutData['sessionId'] != sessionId) {
+      await _firestore.runTransaction((transaction) async {
+        final session = await transaction.get(sessionReference);
+        final checkout = await transaction.get(checkoutReference);
+        final sessionData = session.data();
+        final checkoutData = checkout.data();
+        if (!session.exists ||
+            sessionData == null ||
+            sessionData['ownerUid'] != uid ||
+            sessionData['status'] != 'active' ||
+            !checkout.exists ||
+            checkoutData == null ||
+            checkoutData['ownerUid'] != uid ||
+            checkoutData['sessionId'] != sessionId) {
+          throw const AttendanceApiException(
+            'Không thể đổi checkout code của phiên này.',
+          );
+        }
+
+        final generation = (checkoutData['generation'] as num?)?.toInt() ?? 0;
+        nextCode = _newCheckoutCode(excluding: checkoutData['code'] as String?);
+        transaction.update(checkoutReference, {
+          'code': nextCode,
+          'generation': generation + 1,
+          'issuedAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      final updated = await checkoutReference.get(
+        const GetOptions(source: Source.server),
+      );
+      final data = updated.data();
+      final code = data?['code'];
+      final issuedAt = data?['issuedAt'];
+      if (code is! String || issuedAt is! Timestamp) {
         throw const AttendanceApiException(
-          'Không thể đổi checkout code của phiên này.',
+          'Không đọc được checkout code mới từ Firebase.',
         );
       }
-
-      final generation = (checkoutData['generation'] as num?)?.toInt() ?? 0;
-      nextCode = _newCheckoutCode(excluding: checkoutData['code'] as String?);
-      transaction.update(checkoutReference, {
-        'code': nextCode,
-        'generation': generation + 1,
-        'issuedAt': FieldValue.serverTimestamp(),
-      });
-    });
-
-    final updated = await checkoutReference.get(
-      const GetOptions(source: Source.server),
-    );
-    final data = updated.data();
-    final code = data?['code'];
-    final issuedAt = data?['issuedAt'];
-    if (code is! String || issuedAt is! Timestamp) {
-      throw const AttendanceApiException(
-        'Không đọc được checkout code mới từ Firebase.',
-      );
-    }
-    return RotatedCheckoutCode(
-      code: code,
-      issuedAt: issuedAt.toDate(),
-    );
-  });
+      return RotatedCheckoutCode(code: code, issuedAt: issuedAt.toDate());
+    },
+  );
 
   Future<void> setAttendancePolicy({
     required String courseClassId,
@@ -1394,9 +1398,7 @@ class AttendanceApi {
       // Mỗi lần issue QR mới, increment generation để invalidate token cũ.
       final currentGen = (data['currentQrGeneration'] as num?)?.toInt() ?? 0;
       final newGen = currentGen + 1;
-      transaction.update(sessionReference, {
-        'currentQrGeneration': newGen,
-      });
+      transaction.update(sessionReference, {'currentQrGeneration': newGen});
       transaction.set(tokenReference, {
         'ownerUid': uid,
         'sessionId': sessionId,
@@ -1427,7 +1429,20 @@ class AttendanceApi {
     );
   });
 
-  Future<void> stopAttendance(String sessionId) => _guard(() async {
+  Future<bool> isAttendanceActive(String sessionId) => _guard(() async {
+    final session = await _firestore
+        .collection('attendanceSessions')
+        .doc(sessionId)
+        .get(const GetOptions(source: Source.server));
+    final data = session.data();
+    if (data == null || data['ownerUid'] != _teacherUid()) {
+      throw const AttendanceApiException('Không tìm thấy phiên điểm danh.');
+    }
+    return data['status'] == 'active';
+  });
+
+  /// Returns warnings for follow-up tasks. The Firestore stop itself succeeded.
+  Future<List<String>> stopAttendance(String sessionId) => _guard(() async {
     final uid = _teacherUid();
     final sessionReference = _firestore
         .collection('attendanceSessions')
@@ -1458,12 +1473,16 @@ class AttendanceApi {
       );
     });
 
-    await _deleteSessionTokens(uid: uid, sessionId: sessionId);
+    final warnings = <String>[];
+    try {
+      await _deleteSessionTokens(uid: uid, sessionId: sessionId);
+    } on Object catch (error) {
+      warnings.add('Không dọn được QR cũ: $error');
+    }
     try {
       await syncPendingCheckIns(sessionId: sessionId);
-    } on Object {
-      // The session is already stopped. A temporary sync failure must not make
-      // the UI report that stopping the session itself failed.
+    } on Object catch (error) {
+      warnings.add('Chưa đồng bộ xong Google Sheets: $error');
     }
     if (_sheets.isConfigured) {
       try {
@@ -1471,10 +1490,11 @@ class AttendanceApi {
           subject: sheetTarget.subject,
           classCode: sheetTarget.classCode,
         );
-      } on Object {
-        // The Firestore attendance remains authoritative and can be synced later.
+      } on Object catch (error) {
+        warnings.add('Chưa sắp xếp được Google Sheets: $error');
       }
     }
+    return warnings;
   });
 
   Stream<int> watchAttendanceCount(String sessionId) {
