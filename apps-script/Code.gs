@@ -9,6 +9,7 @@ const HEADERS = [
   'Session ID',
   'Updated at',
   'Record ID',
+  'Revision',
 ];
 
 function doPost(event) {
@@ -25,7 +26,8 @@ function doPost(event) {
       'SPREADSHEET_ID',
     );
     if (payload.action === 'upsert' || payload.action === 'append') {
-      upsertAttendance(spreadsheetId, payload);
+      const revision = upsertAttendance(spreadsheetId, payload);
+      return jsonResponse({ok: true, revision});
     } else if (payload.action === 'sort') {
       sortAttendance(spreadsheetId, payload);
     } else {
@@ -48,6 +50,10 @@ function upsertAttendance(spreadsheetId, payload) {
       requiredText(payload.classCode, 'classCode'),
     );
     const recordId = requiredText(payload.recordId, 'recordId');
+    const revision = Number(payload.revision);
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      throw new Error('revision không hợp lệ.');
+    }
     let existing = null;
     if (sheet.getLastRow() > 1) {
       existing = sheet
@@ -55,6 +61,12 @@ function upsertAttendance(spreadsheetId, payload) {
         .createTextFinder(recordId)
         .matchEntireCell(true)
         .findNext();
+    }
+    if (existing) {
+      const storedRevision = Number(sheet.getRange(existing.getRow(), 11).getValue()) || 0;
+      if (storedRevision > revision) {
+        throw new Error('Bản ghi Sheets đã có revision mới hơn.');
+      }
     }
 
     const checkedInAt = payload.checkedInAt ? new Date(payload.checkedInAt) : null;
@@ -85,6 +97,7 @@ function upsertAttendance(spreadsheetId, payload) {
       String(payload.sessionId || '').trim(),
       Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', "yyyy-MM-dd'T'HH:mm:ssXXX"),
       recordId,
+      revision,
     ];
     if (existing) {
       sheet.getRange(existing.getRow(), 1, 1, HEADERS.length).setValues([row]);
@@ -92,6 +105,7 @@ function upsertAttendance(spreadsheetId, payload) {
       sheet.appendRow(row);
     }
     sortSheet(sheet);
+    return revision;
   } finally {
     lock.releaseLock();
   }
@@ -147,7 +161,7 @@ function migrateLegacyHeaders(sheet) {
     const rowCount = sheet.getLastRow() - 1;
     const oldRows = rowCount > 0 ? sheet.getRange(2, 1, rowCount, 8).getValues() : [];
     const migrated = oldRows.map((row) => [
-      row[0], row[1], row[2], row[3], 'present', 'qr', '', row[5], row[6], row[7],
+      row[0], row[1], row[2], row[3], 'present', 'qr', '', row[5], row[6], row[7], 0,
     ]);
     sheet.clearContents();
     sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
@@ -156,6 +170,8 @@ function migrateLegacyHeaders(sheet) {
     }
     sheet.setFrozenRows(1);
     sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
+  } else if (sheet.getLastColumn() < HEADERS.length) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
   }
 }
 

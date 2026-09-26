@@ -476,3 +476,46 @@ test('[teacherScheduleLocks deny] update lock bi tu choi', async () => {
     ),
   );
 });
+
+test('teacher edits advance revision while sync metadata preserves it', async () => {
+  const db = testEnvironment.authenticatedContext(teacherUid).firestore();
+  const record = doc(db, 'attendance', courseClassId, 'slots', '1', 'records', 'student-hash-2');
+  await assertSucceeds(setDoc(record, {
+    ownerUid: teacherUid,
+    studentId: 'student-hash-2',
+    courseClassId,
+    slotKey: '1',
+    attendanceStatus: 'present',
+    recordSource: 'teacher',
+    syncStatus: 'pending',
+    revision: 1,
+  }));
+  await assertFails(setDoc(record, {
+    attendanceStatus: 'absent',
+    syncStatus: 'pending',
+  }, { merge: true }));
+  await assertSucceeds(setDoc(record, {
+    attendanceStatus: 'absent',
+    syncStatus: 'pending',
+    revision: 2,
+  }, { merge: true }));
+  await assertSucceeds(setDoc(record, {
+    syncStatus: 'synced',
+  }, { merge: true }));
+  const snapshot = await getDoc(record);
+  if (snapshot.data()?.revision !== 2) throw new Error('Sync changed the record revision.');
+});
+
+test('an existing unversioned record can migrate to revision zero', async () => {
+  const db = testEnvironment.authenticatedContext(teacherUid).firestore();
+  const record = doc(db, 'attendance', courseClassId, 'slots', '1', 'records', 'student-1');
+  await assertSucceeds(setDoc(record, {
+    revision: 0,
+    syncStatus: 'synced',
+  }, { merge: true }));
+  await assertSucceeds(setDoc(record, {
+    revision: 1,
+    attendanceStatus: 'absent',
+    syncStatus: 'pending',
+  }, { merge: true }));
+});

@@ -10,7 +10,7 @@ void main() {
     Map<String, dynamic>? payload;
     final client = MockClient((request) async {
       payload = jsonDecode(request.body) as Map<String, dynamic>;
-      return http.Response('{"ok":true}', 200);
+      return http.Response('{"ok":true,"revision":1}', 200);
     });
     final service = AppsScriptSheetService(
       client: client,
@@ -20,6 +20,7 @@ void main() {
 
     await service.upsert(
       recordId: 'attendance|class|slots|1|records|student',
+      revision: 1,
       subject: 'PRM393',
       classCode: 'SE1917',
       slot: 1,
@@ -33,24 +34,18 @@ void main() {
     );
 
     expect(payload?['action'], 'upsert');
+    expect(payload?['revision'], 1);
     expect(payload?['attendanceStatus'], 'excused');
     expect(payload?['recordSource'], 'teacher');
     expect(payload?['reason'], 'Có giấy xác nhận');
     expect(payload?.containsKey('checkedInAt'), isFalse);
   });
 
-  test('QR sync falls back to append for a legacy Apps Script', () async {
+  test('old Apps Script cannot acknowledge a revision', () async {
     final actions = <String>[];
     final client = MockClient((request) async {
       final payload = jsonDecode(request.body) as Map<String, dynamic>;
       actions.add(payload['action'] as String);
-      if (payload['action'] == 'upsert') {
-        return http.Response.bytes(
-          utf8.encode('{"ok":false,"error":"Action không được hỗ trợ."}'),
-          200,
-          headers: {'content-type': 'application/json; charset=utf-8'},
-        );
-      }
       return http.Response('{"ok":true}', 200);
     });
     final service = AppsScriptSheetService(
@@ -59,20 +54,24 @@ void main() {
       secret: 'test-secret',
     );
 
-    await service.upsert(
-      recordId: 'attendance|class|slots|1|records|student',
-      subject: 'PRM393',
-      classCode: 'SE1917',
-      slot: 1,
-      date: '2026-09-20',
-      email: 'student@fpt.edu.vn',
-      sessionId: 'session-1',
-      checkedInAt: DateTime.utc(2026, 9, 20, 9),
-      attendanceStatus: 'present',
-      recordSource: 'qr',
+    await expectLater(
+      service.upsert(
+        recordId: 'attendance|class|slots|1|records|student',
+        revision: 1,
+        subject: 'PRM393',
+        classCode: 'SE1917',
+        slot: 1,
+        date: '2026-09-20',
+        email: 'student@fpt.edu.vn',
+        sessionId: 'session-1',
+        checkedInAt: DateTime.utc(2026, 9, 20, 9),
+        attendanceStatus: 'present',
+        recordSource: 'qr',
+      ),
+      throwsA(isA<SheetSyncException>()),
     );
 
-    expect(actions, ['upsert', 'append']);
+    expect(actions, ['upsert']);
   });
 
   test('manual attendance never falls back to a legacy append', () async {
@@ -95,6 +94,7 @@ void main() {
     await expectLater(
       service.upsert(
         recordId: 'attendance|class|slots|1|records|student',
+        revision: 1,
         subject: 'PRM393',
         classCode: 'SE1917',
         slot: 1,

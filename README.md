@@ -61,6 +61,12 @@ tượng chỉnh sửa, chọn **Version → New version** rồi **Deploy**. Cá
 URL trong `firebase.desktop.json`. Nếu tạo một deployment hoàn toàn mới thì phải
 cập nhật lại `APPS_SCRIPT_URL` và build lại ứng dụng desktop.
 
+Đồng bộ theo `revision` yêu cầu deploy phiên bản `Code.gs` mới trước khi chạy
+desktop mới. Desktop chỉ đánh dấu `synced` khi Apps Script trả về đúng revision;
+deployment cũ không xác nhận revision sẽ để bản ghi ở trạng thái `error` để thử
+lại sau khi cập nhật Apps Script. Các tab Sheets hiện có được thêm cột `Revision`
+tự động khi nhận lượt ghi đầu tiên từ bản mới.
+
 Các thay đổi điểm danh được lưu vào Firestore trước với `syncStatus: pending`.
 Nếu Apps Script tạm thời lỗi, bản ghi chuyển thành `error` thay vì bị mất. Sau khi
 deployment hoạt động, nút làm mới ở màn hình **Tổng quan lớp** sẽ thử đồng bộ lại

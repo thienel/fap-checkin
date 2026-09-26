@@ -19,6 +19,7 @@ class AppsScriptSheetService {
 
   Future<void> upsert({
     required String recordId,
+    required int revision,
     required String subject,
     required String classCode,
     required int slot,
@@ -33,6 +34,7 @@ class AppsScriptSheetService {
     final payload = <String, Object>{
       'action': 'upsert',
       'recordId': recordId,
+      'revision': revision,
       'subject': subject,
       'classCode': classCode,
       'slot': slot,
@@ -46,24 +48,11 @@ class AppsScriptSheetService {
       'recordSource': recordSource,
       ...?(reason == null ? null : {'reason': reason}),
     };
-    try {
-      await _post(payload);
-    } on SheetSyncException catch (error) {
-      final unsupported =
-          error.message.contains('không được hỗ trợ') ||
-          error.message.toLowerCase().contains('not supported');
-      // Deployments created before Phase 4 only understand `append`. Keep QR
-      // attendance syncing while the Apps Script deployment is upgraded. A
-      // manual/policy record must not use this fallback because old scripts
-      // cannot represent or update those statuses safely.
-      if (!unsupported ||
-          attendanceStatus != 'present' ||
-          recordSource != 'qr' ||
-          checkedInAt == null ||
-          sessionId.isEmpty) {
-        rethrow;
-      }
-      await _post({...payload, 'action': 'append'});
+    final result = await _post(payload);
+    if (result['revision'] != revision) {
+      throw const SheetSyncException(
+        'Apps Script chưa xác nhận phiên bản bản ghi. Hãy deploy Code.gs mới.',
+      );
     }
   }
 
@@ -74,8 +63,10 @@ class AppsScriptSheetService {
     await _post({'action': 'sort', 'subject': subject, 'classCode': classCode});
   }
 
-  Future<void> _post(Map<String, Object> payload) async {
-    if (!isConfigured) return;
+  Future<Map<String, dynamic>> _post(Map<String, Object> payload) async {
+    if (!isConfigured) {
+      throw const SheetSyncException('Apps Script chưa được cấu hình.');
+    }
 
     final endpoint = Uri.parse(_url);
     var response = await _client
@@ -136,6 +127,7 @@ class AppsScriptSheetService {
         message is String ? message : 'Không thể đồng bộ Google Sheets.',
       );
     }
+    return Map<String, dynamic>.from(decoded);
   }
 }
 

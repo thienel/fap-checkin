@@ -1299,6 +1299,7 @@ class AttendanceApi {
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': uid,
         'syncStatus': 'pending',
+        'revision': ((beforeData?['revision'] as num?)?.toInt() ?? 0) + 1,
         if (status == AttendanceStatus.present)
           'checkedInAt':
               beforeData?['checkedInAt'] ?? FieldValue.serverTimestamp(),
@@ -1623,42 +1624,87 @@ class AttendanceApi {
   Future<String?> _performSyncDocument(
     DocumentSnapshot<Map<String, dynamic>> document,
   ) async {
+    final reference = document.reference;
+    DocumentSnapshot<Map<String, dynamic>> current;
     try {
-      final data = document.data();
-      if (data == null) return null;
-      final checkedInAt = data['checkedInAt'];
-      await _sheets.upsert(
-        recordId: document.reference.path.replaceAll('/', '|'),
-        subject: data['subject'] as String,
-        classCode: data['classCode'] as String,
-        slot: (data['slot'] as num).toInt(),
-        date: data['date'] as String,
-        email: data['email'] as String,
-        sessionId: data['sessionId'] as String? ?? '',
-        checkedInAt: checkedInAt is Timestamp ? checkedInAt.toDate() : null,
-        attendanceStatus: data['attendanceStatus'] as String? ?? 'present',
-        recordSource: data['recordSource'] as String? ?? 'qr',
-        reason: data['reason'] as String?,
-      );
-      await document.reference.update({
-        'syncStatus': 'synced',
-        'syncedAt': FieldValue.serverTimestamp(),
-        'syncError': FieldValue.delete(),
-      });
-      return null;
+      current = await reference.get(const GetOptions(source: Source.server));
     } on Object catch (error) {
-      final message = error.toString();
-      try {
-        await document.reference.update({
-          'syncStatus': 'error',
-          'syncError': message.length > 300
-              ? message.substring(0, 300)
-              : message,
-        });
-      } on Object {
-        // A failed status update must not crash the live attendance screen.
+      return error.toString();
+    }
+    while (true) {
+      final data = current.data();
+      if (data == null ||
+          (data['syncStatus'] != 'pending' && data['syncStatus'] != 'error')) {
+        return null;
       }
-      return message;
+      final revision = (data['revision'] as num?)?.toInt() ?? 0;
+      final checkedInAt = data['checkedInAt'];
+      try {
+        await _sheets.upsert(
+          recordId: reference.path.replaceAll('/', '|'),
+          revision: revision,
+          subject: data['subject'] as String,
+          classCode: data['classCode'] as String,
+          slot: (data['slot'] as num).toInt(),
+          date: data['date'] as String,
+          email: data['email'] as String,
+          sessionId: data['sessionId'] as String? ?? '',
+          checkedInAt: checkedInAt is Timestamp ? checkedInAt.toDate() : null,
+          attendanceStatus: data['attendanceStatus'] as String? ?? 'present',
+          recordSource: data['recordSource'] as String? ?? 'qr',
+          reason: data['reason'] as String?,
+        );
+        final changed = await _firestore.runTransaction((transaction) async {
+          final latest = await transaction.get(reference);
+          final latestData = latest.data();
+          if (latestData == null || latestData['syncStatus'] == 'synced') {
+            return false;
+          }
+          if (((latestData['revision'] as num?)?.toInt() ?? 0) != revision) {
+            return true;
+          }
+          transaction.update(reference, {
+            if (reference.parent.id == 'records') 'revision': revision,
+            'syncStatus': 'synced',
+            'syncedAt': FieldValue.serverTimestamp(),
+            'syncError': FieldValue.delete(),
+          });
+          return false;
+        });
+        if (!changed) return null;
+      } on Object catch (error) {
+        final message = error.toString();
+        try {
+          final outcome = await _firestore.runTransaction((transaction) async {
+            final latest = await transaction.get(reference);
+            final latestData = latest.data();
+            if (latestData == null || latestData['syncStatus'] == 'synced') {
+              return 'done';
+            }
+            if (((latestData['revision'] as num?)?.toInt() ?? 0) != revision) {
+              return 'changed';
+            }
+            transaction.update(reference, {
+              if (reference.parent.id == 'records') 'revision': revision,
+              'syncStatus': 'error',
+              'syncError': message.length > 300
+                  ? message.substring(0, 300)
+                  : message,
+            });
+            return 'failed';
+          });
+          if (outcome == 'done') return null;
+          if (outcome == 'failed') return message;
+        } on Object {
+          // A failed status update must not crash the live attendance screen.
+          return message;
+        }
+      }
+      try {
+        current = await reference.get(const GetOptions(source: Source.server));
+      } on Object catch (error) {
+        return error.toString();
+      }
     }
   }
 
@@ -1729,6 +1775,7 @@ class AttendanceApi {
           'updatedAt': FieldValue.serverTimestamp(),
           'updatedBy': ownerUid,
           'syncStatus': 'pending',
+          'revision': 1,
         });
       }
       await batch.commit();

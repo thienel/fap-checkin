@@ -253,6 +253,7 @@ async function writeCheckIn(user, checkoutCode) {
         updatedAt: now,
         updatedBy: user.uid,
         syncStatus: 'pending',
+        revision: 1,
         attendanceStatus: 'present',
         recordSource: 'qr',
       });

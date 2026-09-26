@@ -48,7 +48,7 @@ service cloud.firestore {
           'studentCode', 'fullName', 'sessionId', 'courseClassId', 'subject',
           'classCode', 'slot', 'slotKey', 'date', 'qrToken', 'checkoutCode',
           'checkedInAt', 'createdAt', 'updatedAt', 'updatedBy', 'syncStatus',
-          'attendanceStatus', 'recordSource'
+          'attendanceStatus', 'recordSource', 'revision'
         ])
         && attendance.studentId == studentId
         && attendance.courseClassId == courseClassId
@@ -98,6 +98,7 @@ service cloud.firestore {
         && attendance.createdAt == request.time
         && attendance.updatedAt == request.time
         && attendance.syncStatus == 'pending'
+        && attendance.revision == 1
         && attendance.attendanceStatus == 'present'
         && attendance.recordSource == 'qr';
     }
@@ -340,13 +341,30 @@ service cloud.firestore {
 
       // Branch giảng viên/policy: chỉ teacher có thể create/update với mọi status.
       // Sinh viên hoàn toàn không được update hoặc delete record của mình.
-      allow create, update: if ownsCourse(courseClassId)
+      allow create: if ownsCourse(courseClassId)
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.studentId == studentId
         && request.resource.data.courseClassId == courseClassId
         && request.resource.data.slotKey == slotKey
         && request.resource.data.attendanceStatus in ['present', 'absent', 'excused']
-        && request.resource.data.recordSource in ['qr', 'teacher', 'policy'];
+        && request.resource.data.recordSource in ['qr', 'teacher', 'policy']
+        && request.resource.data.revision == 1;
+      allow update: if ownsCourse(courseClassId)
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.studentId == studentId
+        && request.resource.data.courseClassId == courseClassId
+        && request.resource.data.slotKey == slotKey
+        && request.resource.data.attendanceStatus in ['present', 'absent', 'excused']
+        && request.resource.data.recordSource in ['qr', 'teacher', 'policy']
+        && request.resource.data.revision is int
+        && (
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'syncStatus', 'syncedAt', 'syncError', 'revision'
+          ])
+            && request.resource.data.revision == resource.data.get('revision', 0))
+          || (request.resource.data.syncStatus == 'pending'
+            && request.resource.data.revision == resource.data.get('revision', 0) + 1)
+        );
       allow delete: if false;
 
       match /audit/{auditId} {
