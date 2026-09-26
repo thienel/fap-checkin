@@ -556,7 +556,7 @@ class _SessionScreenState extends State<SessionScreen> {
     final change = await _attendanceChangeDialog(attendance);
     if (change == null || !mounted) return;
     try {
-      await widget.api.adjustAttendance(
+      final result = await widget.api.adjustAttendance(
         courseClassId: widget.session.courseClassId,
         slot: widget.session.slot,
         studentId: attendance.student.id,
@@ -565,7 +565,13 @@ class _SessionScreenState extends State<SessionScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Đã cập nhật trạng thái điểm danh.')),
+        SnackBar(
+          content: Text(
+            result.synced
+                ? 'Đã cập nhật trạng thái điểm danh và Google Sheets.'
+                : 'Đã lưu trạng thái điểm danh; chờ đồng bộ Google Sheets: ${result.syncError}',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;

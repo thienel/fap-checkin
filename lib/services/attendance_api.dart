@@ -1216,7 +1216,7 @@ class AttendanceApi {
     });
   });
 
-  Future<void> adjustAttendance({
+  Future<AttendanceAdjustmentResult> adjustAttendance({
     required String courseClassId,
     required int slot,
     required String studentId,
@@ -1331,17 +1331,22 @@ class AttendanceApi {
     });
 
     if (!_sheets.isConfigured) {
-      throw const AttendanceApiException(
-        'Đã lưu trạng thái trên hệ thống nhưng chưa thể cập nhật Google Sheets '
-        'vì Apps Script chưa được cấu hình.',
+      return const AttendanceAdjustmentResult(
+        synced: false,
+        syncError: 'Apps Script chưa được cấu hình.',
       );
     }
-    final updated = await recordReference.get();
-    final syncError = await _syncDocument(updated);
-    if (syncError != null) {
-      throw AttendanceApiException(
-        'Đã lưu trạng thái trên hệ thống nhưng chưa thể cập nhật Google Sheets: '
-        '$syncError. Bản ghi đã được giữ trong hàng đợi để thử lại.',
+    try {
+      final updated = await recordReference.get();
+      final syncError = await _syncDocument(updated);
+      return AttendanceAdjustmentResult(
+        synced: syncError == null,
+        syncError: syncError,
+      );
+    } on Object catch (error) {
+      return AttendanceAdjustmentResult(
+        synced: false,
+        syncError: error.toString(),
       );
     }
   });
@@ -1922,6 +1927,13 @@ class AttendanceApi {
       '${value.year.toString().padLeft(4, '0')}-'
       '${value.month.toString().padLeft(2, '0')}-'
       '${value.day.toString().padLeft(2, '0')}';
+}
+
+class AttendanceAdjustmentResult {
+  const AttendanceAdjustmentResult({required this.synced, this.syncError});
+
+  final bool synced;
+  final String? syncError;
 }
 
 class AttendanceApiException implements Exception {

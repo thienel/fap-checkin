@@ -177,7 +177,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
     );
     if (change == null) return;
     try {
-      await widget.api.adjustAttendance(
+      final result = await widget.api.adjustAttendance(
         courseClassId: overview.courseClassId,
         slot: slot.number,
         studentId: student.id,
@@ -187,10 +187,17 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
       if (!mounted) return;
       _refresh();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Đã cập nhật hệ thống và Google Sheets.')),
+        SnackBar(
+          content: Text(
+            result.synced
+                ? 'Đã cập nhật hệ thống và Google Sheets.'
+                : 'Đã lưu trên hệ thống; chờ đồng bộ Google Sheets: ${result.syncError}',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
+      _refresh();
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Cập nhật chưa hoàn tất: $error')));
