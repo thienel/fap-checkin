@@ -34,6 +34,7 @@ const checkoutForm = document.querySelector('#checkout-form');
 const checkoutCodeInput = document.querySelector('#checkout-code');
 const codeError = document.querySelector('#code-error');
 const checkoutSubmitButton = document.querySelector('#checkout-submit');
+const switchAccountButton = document.querySelector('#switch-account');
 const params = new URLSearchParams(window.location.search);
 const urlToken = params.get('t');
 if (urlToken) sessionStorage.setItem('attendanceQrToken', urlToken);
@@ -59,7 +60,7 @@ function showStatus(kind, heading, detail, { allowCheckout = false, allowSignIn 
 
 function promptCheckoutCode(user) {
   title.textContent = 'Nhập mã xác nhận';
-  message.textContent = `Đã đăng nhập bằng ${user.email ?? 'tài khoản Google'}. Nhập mã giảng viên cung cấp để xác nhận điểm danh.`;
+  message.textContent = `Đã đăng nhập bằng ${user.email ?? 'tài khoản Google'}. Hãy dùng email đã đăng ký với lớp, rồi nhập mã giảng viên cung cấp.`;
   setCodeError();
   status.className = 'status hidden';
   status.textContent = '';
@@ -310,6 +311,25 @@ async function bootstrap() {
     setCodeError('Mã xác nhận phải gồm đúng 5 ký tự chữ hoặc số.');
   });
   checkoutCodeInput.addEventListener('input', () => setCodeError());
+
+  switchAccountButton.addEventListener('click', async () => {
+    switchAccountButton.disabled = true;
+    try {
+      await signOut(auth);
+      submitStarted = false;
+      checkoutCodeInput.value = '';
+      setCodeError();
+      showStatus('info', 'Chọn tài khoản khác', 'Đăng nhập bằng email Google đã đăng ký trong danh sách lớp.', {
+        allowSignIn: true,
+      });
+      signInButton.focus();
+    } catch (error) {
+      showStatus('error', 'Không thể đổi tài khoản', readableError(error), { allowCheckout: true });
+      switchAccountButton.focus();
+    } finally {
+      switchAccountButton.disabled = false;
+    }
+  });
 
   signInButton.addEventListener('click', async () => {
     signInButton.disabled = true;

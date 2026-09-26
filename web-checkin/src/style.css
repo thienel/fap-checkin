@@ -91,6 +91,9 @@ h1 { margin: 0; font-size: 30px; line-height: 1.16; letter-spacing: -.025em; }
 .checkout-form input:focus { border-color: #2b7489; box-shadow: 0 0 0 3px rgba(43, 116, 137, .14); }
 .checkout-form input[aria-invalid="true"] { border-color: #a42a2a; }
 .checkout-form .primary-button { margin-top: 3px; color: white; border-color: #164e63; background: #164e63; }
+.secondary-button { min-height: 42px; border: 0; color: #164e63; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
+.secondary-button:hover { text-decoration: underline; }
+.secondary-button:disabled { opacity: .6; cursor: wait; }
 
 .status {
   width: 72px;
