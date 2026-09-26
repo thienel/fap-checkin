@@ -1741,36 +1741,41 @@ class AttendanceApi {
     final missingStudents = students.docs
         .where((student) => !existingIds.contains(student.id))
         .toList();
-    for (var start = 0; start < missingStudents.length; start += 400) {
-      final end = min(start + 400, missingStudents.length);
-      final batch = _firestore.batch();
-      for (final student in missingStudents.sublist(start, end)) {
-        final data = student.data();
-        batch.set(records.doc(student.id), {
-          'ownerUid': ownerUid,
-          'studentId': student.id,
-          'email': data['email'],
-          'emailNormalized': data['emailNormalized'],
-          'studentCode': data['studentCode'],
-          'fullName': data['fullName'],
-          'sessionId': sessionId,
-          'courseClassId': courseClassId,
-          'subject': subject,
-          'classCode': classCode,
-          'slot': slot,
-          'slotKey': '$slot',
-          'date': date,
-          'attendanceStatus': 'excused',
-          'recordSource': 'policy',
-          'reason': 'Miễn điểm danh toàn khóa',
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-          'updatedBy': ownerUid,
-          'syncStatus': 'pending',
-          'revision': 1,
-        });
-      }
-      await batch.commit();
+    for (var start = 0; start < missingStudents.length; start += 20) {
+      final end = min(start + 20, missingStudents.length);
+      await Future.wait(
+        missingStudents.sublist(start, end).map((student) async {
+          final reference = records.doc(student.id);
+          await _firestore.runTransaction((transaction) async {
+            final current = await transaction.get(reference);
+            if (current.exists) return;
+            final data = student.data();
+            transaction.set(reference, {
+              'ownerUid': ownerUid,
+              'studentId': student.id,
+              'email': data['email'],
+              'emailNormalized': data['emailNormalized'],
+              'studentCode': data['studentCode'],
+              'fullName': data['fullName'],
+              'sessionId': sessionId,
+              'courseClassId': courseClassId,
+              'subject': subject,
+              'classCode': classCode,
+              'slot': slot,
+              'slotKey': '$slot',
+              'date': date,
+              'attendanceStatus': 'excused',
+              'recordSource': 'policy',
+              'reason': 'Miễn điểm danh toàn khóa',
+              'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+              'updatedBy': ownerUid,
+              'syncStatus': 'pending',
+              'revision': 1,
+            });
+          });
+        }),
+      );
     }
   }
 
