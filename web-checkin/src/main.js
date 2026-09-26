@@ -15,6 +15,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import './style.css';
+import { duplicatePresentation } from './duplicate_status.js';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -45,7 +46,7 @@ function showStatus(kind, heading, detail, { allowCheckout = false, allowSignIn 
   title.textContent = heading;
   message.textContent = detail;
   status.className = `status ${kind}`;
-  status.textContent = kind === 'success' ? '✓' : kind === 'error' ? '!' : '…';
+  status.textContent = kind === 'success' ? '✓' : kind === 'info' ? 'i' : kind === 'loading' ? '…' : '!';
   signInButton.classList.toggle('hidden', !allowSignIn);
   checkoutForm.classList.toggle('hidden', !allowCheckout);
 }
@@ -119,10 +120,8 @@ async function submitCheckIn(user, code) {
 
     sessionStorage.removeItem('attendanceQrToken');
     if (result.status === 'duplicate') {
-      const detail = result.attendanceStatus === 'excused'
-        ? `${result.email} đang được ghi nhận có phép cho slot này.`
-        : `${result.email} đã được ghi nhận trước đó cho slot này.`;
-      showStatus('success', 'Đã có trạng thái điểm danh', detail);
+      const presentation = duplicatePresentation(result.attendanceStatus, result.email);
+      showStatus(presentation.kind, presentation.title, presentation.detail);
     } else {
       showStatus('success', 'Điểm danh thành công', `${result.email} đã được ghi nhận.`);
     }

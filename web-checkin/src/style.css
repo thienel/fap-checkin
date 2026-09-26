@@ -101,6 +101,8 @@ h1 { margin: 0; font-size: 30px; line-height: 1.16; letter-spacing: -.025em; }
 }
 
 .status.success { color: #0c6b46; background: #dff7ed; }
+.status.info { color: #175c87; background: #e4f2fb; }
+.status.warning { color: #865500; background: #fff1cc; }
 .status.error { color: #a42a2a; background: #fde7e7; }
 .status.loading { color: #1c667a; background: #e2f2f5; animation: pulse 1s ease-in-out infinite alternate; }
 .privacy { margin: 22px 0 0; color: #829197; font-size: 12px; line-height: 1.5; }
