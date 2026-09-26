@@ -40,7 +40,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     _weekStart = startOfWeek(DateTime.now());
     _refresh();
-    unawaited(widget.api.syncPendingCheckIns().catchError((_) {}));
+    unawaited(widget.api.syncPendingCheckIns().then((_) {}, onError: (_) {}));
     if (kDebugMode) {
       unawaited(
         widget.api

@@ -271,11 +271,15 @@ class _SessionScreenState extends State<SessionScreen> {
     if (_retryingSync) return;
     setState(() => _retryingSync = true);
     try {
-      await widget.api.syncPendingCheckIns();
+      final result = await widget.api.syncPendingCheckIns(force: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Đã yêu cầu đồng bộ lại với Google Sheets.'),
+        SnackBar(
+          content: Text(
+            result.notConfigured
+                ? 'Google Sheets chưa được cấu hình.'
+                : 'Đã đồng bộ ${result.synced} bản ghi; còn chờ ${result.pending}, lỗi ${result.error}.',
+          ),
           backgroundColor: AppColors.primary,
         ),
       );

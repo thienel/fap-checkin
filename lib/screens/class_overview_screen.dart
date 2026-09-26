@@ -69,11 +69,17 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
 
   Future<void> _refreshAndSync() async {
     try {
-      await widget.api.syncPendingCheckIns();
+      final result = await widget.api.syncPendingCheckIns(force: true);
       if (!mounted) return;
       _refresh();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Đã đồng bộ dữ liệu với Google Sheets.')),
+        SnackBar(
+          content: Text(
+            result.notConfigured
+                ? 'Google Sheets chưa được cấu hình.'
+                : 'Đã đồng bộ ${result.synced} bản ghi; còn chờ ${result.pending}, lỗi ${result.error}.',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;

@@ -68,7 +68,10 @@ class _StartFailureApi implements AttendanceApi {
   }
 
   @override
-  Future<void> syncPendingCheckIns({String? sessionId}) async {}
+  Future<SheetSyncSummary> syncPendingCheckIns({
+    String? sessionId,
+    bool force = false,
+  }) async => const SheetSyncSummary();
 
   @override
   Future<void> createTestCourseClassNow() async {}

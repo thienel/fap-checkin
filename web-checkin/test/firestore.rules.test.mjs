@@ -504,6 +504,16 @@ test('teacher edits advance revision while sync metadata preserves it', async ()
   await assertSucceeds(setDoc(record, {
     syncStatus: 'synced',
   }, { merge: true }));
+  await assertSucceeds(setDoc(record, {
+    syncStatus: 'error',
+    syncAttempts: 1,
+    nextSyncAttemptAt: futureTime,
+  }, { merge: true }));
+  await assertSucceeds(setDoc(record, {
+    syncStatus: 'synced',
+    syncAttempts: 0,
+    nextSyncAttemptAt: null,
+  }, { merge: true }));
   const snapshot = await getDoc(record);
   if (snapshot.data()?.revision !== 2) throw new Error('Sync changed the record revision.');
 });

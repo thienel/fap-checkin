@@ -1502,7 +1502,14 @@ class AttendanceApi {
       warnings.add('Không dọn được QR cũ: $error');
     }
     try {
-      await syncPendingCheckIns(sessionId: sessionId);
+      final sync = await syncPendingCheckIns(sessionId: sessionId);
+      if (sync.notConfigured) {
+        warnings.add('Google Sheets chưa được cấu hình.');
+      } else if (sync.error > 0 || sync.pending > 0) {
+        warnings.add(
+          'Còn ${sync.error + sync.pending} bản ghi chưa đồng bộ Google Sheets.',
+        );
+      }
     } on Object catch (error) {
       warnings.add('Chưa đồng bộ xong Google Sheets: $error');
     }
@@ -1580,8 +1587,13 @@ class AttendanceApi {
         });
   }
 
-  Future<void> syncPendingCheckIns({String? sessionId}) => _guard(() async {
-    if (!_sheets.isConfigured) return;
+  Future<SheetSyncSummary> syncPendingCheckIns({
+    String? sessionId,
+    bool force = false,
+  }) => _guard(() async {
+    if (!_sheets.isConfigured) {
+      return const SheetSyncSummary(notConfigured: true);
+    }
     final uid = _teacherUid();
     Query<Map<String, dynamic>> recordQuery = _firestore
         .collectionGroup('records')
@@ -1595,15 +1607,40 @@ class AttendanceApi {
       recordQuery = recordQuery.where('sessionId', isEqualTo: sessionId);
       legacyQuery = legacyQuery.where('sessionId', isEqualTo: sessionId);
     }
-    final snapshots = await Future.wait([
-      recordQuery.limit(100).get(),
-      legacyQuery.limit(100).get(),
-    ]);
-    await _syncDocuments(
-      [...snapshots[0].docs, ...snapshots[1].docs],
-      retryErrors: true,
-      reportErrors: true,
-    );
+    var synced = 0;
+    var pending = 0;
+    var errors = 0;
+    for (final baseQuery in [recordQuery, legacyQuery]) {
+      QueryDocumentSnapshot<Map<String, dynamic>>? cursor;
+      while (true) {
+        Query<Map<String, dynamic>> pageQuery = baseQuery
+            .orderBy(FieldPath.documentId)
+            .limit(100);
+        if (cursor != null) pageQuery = pageQuery.startAfterDocument(cursor);
+        final page = await pageQuery.get();
+        if (page.docs.isEmpty) break;
+        for (final document in page.docs) {
+          final data = document.data();
+          final retryAt = data['nextSyncAttemptAt'];
+          if (!force &&
+              data['syncStatus'] == 'error' &&
+              retryAt is Timestamp &&
+              retryAt.toDate().isAfter(DateTime.now())) {
+            pending++;
+            continue;
+          }
+          final error = await _syncDocument(document);
+          if (error == null) {
+            synced++;
+          } else {
+            errors++;
+          }
+        }
+        cursor = page.docs.last;
+        if (page.docs.length < 100) break;
+      }
+    }
+    return SheetSyncSummary(synced: synced, pending: pending, error: errors);
   });
 
   Future<void> _syncDocuments(
@@ -1689,6 +1726,8 @@ class AttendanceApi {
             'syncStatus': 'synced',
             'syncedAt': FieldValue.serverTimestamp(),
             'syncError': FieldValue.delete(),
+            'syncAttempts': FieldValue.delete(),
+            'nextSyncAttemptAt': FieldValue.delete(),
           });
           return false;
         });
@@ -1705,12 +1744,24 @@ class AttendanceApi {
             if (((latestData['revision'] as num?)?.toInt() ?? 0) != revision) {
               return 'changed';
             }
+            final attempts =
+                ((latestData['syncAttempts'] as num?)?.toInt() ?? 0) + 1;
+            final backoffSeconds =
+                5 * (1 << (attempts > 10 ? 10 : attempts - 1));
             transaction.update(reference, {
               if (reference.parent.id == 'records') 'revision': revision,
               'syncStatus': 'error',
               'syncError': message.length > 300
                   ? message.substring(0, 300)
                   : message,
+              'syncAttempts': attempts,
+              'nextSyncAttemptAt': Timestamp.fromDate(
+                DateTime.now().add(
+                  Duration(
+                    seconds: backoffSeconds > 3600 ? 3600 : backoffSeconds,
+                  ),
+                ),
+              ),
             });
             return 'failed';
           });
@@ -1943,6 +1994,20 @@ class AttendanceAdjustmentResult {
 
   final bool synced;
   final String? syncError;
+}
+
+class SheetSyncSummary {
+  const SheetSyncSummary({
+    this.synced = 0,
+    this.pending = 0,
+    this.error = 0,
+    this.notConfigured = false,
+  });
+
+  final int synced;
+  final int pending;
+  final int error;
+  final bool notConfigured;
 }
 
 class BulkAttendanceResult {

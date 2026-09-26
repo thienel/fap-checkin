@@ -320,7 +320,7 @@ service cloud.firestore {
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'syncStatus', 'syncedAt', 'syncError'
+            'syncStatus', 'syncedAt', 'syncError', 'syncAttempts', 'nextSyncAttemptAt'
         ]);
       allow delete: if false;
     }
@@ -359,7 +359,7 @@ service cloud.firestore {
         && request.resource.data.revision is int
         && (
           (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'syncStatus', 'syncedAt', 'syncError', 'revision'
+              'syncStatus', 'syncedAt', 'syncError', 'syncAttempts', 'nextSyncAttemptAt', 'revision'
           ])
             && request.resource.data.revision == resource.data.get('revision', 0))
           || (request.resource.data.syncStatus == 'pending'
@@ -388,7 +388,7 @@ service cloud.firestore {
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'syncStatus', 'syncedAt', 'syncError'
+            'syncStatus', 'syncedAt', 'syncError', 'syncAttempts', 'nextSyncAttemptAt'
         ]);
     }
 
@@ -399,7 +399,7 @@ service cloud.firestore {
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'syncStatus', 'syncedAt', 'syncError'
+            'syncStatus', 'syncedAt', 'syncError', 'syncAttempts', 'nextSyncAttemptAt'
         ]);
     }
 

@@ -40,7 +40,10 @@ class FakeAttendanceApi implements AttendanceApi {
   Future<bool> isAttendanceActive(String sessionId) async => activeAfterFailure;
 
   @override
-  Future<void> syncPendingCheckIns({String? sessionId}) async {}
+  Future<SheetSyncSummary> syncPendingCheckIns({
+    String? sessionId,
+    bool force = false,
+  }) async => const SheetSyncSummary();
 
   @override
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
