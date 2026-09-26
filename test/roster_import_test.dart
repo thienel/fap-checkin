@@ -29,6 +29,27 @@ void main() {
     expect(rows.single.emailNormalized, 'alice@example.com');
   });
 
+  test('preview keeps source row numbers after blank CSV rows', () {
+    final file = parseRosterFile(
+      'students.csv',
+      Uint8List.fromList(
+        utf8.encode(
+          'email,studentCode,fullName\n'
+          'first@fpt.edu.vn,SE001,First\n'
+          '\n'
+          'bad-email,SE002,Second\n',
+        ),
+      ),
+    );
+    final rows = validateRosterRows(file, const {
+      RosterField.email: 0,
+      RosterField.studentCode: 1,
+      RosterField.fullName: 2,
+    });
+    expect(rows.map((row) => row.rowNumber), [2, 4]);
+    expect(rows.last.isValid, isFalse);
+  });
+
   test('invalid and duplicate emails are reported per row', () {
     const file = RosterFile(
       headers: ['email', 'studentCode', 'fullName'],
@@ -65,7 +86,13 @@ void main() {
       RosterField.fullName: 2,
     }).single;
 
-    expect(row.errors, containsAll(['Thi\u1ebfu m\u00e3 sinh vi\u00ean', 'Thi\u1ebfu h\u1ecd t\u00ean']));
+    expect(
+      row.errors,
+      containsAll([
+        'Thi\u1ebfu m\u00e3 sinh vi\u00ean',
+        'Thi\u1ebfu h\u1ecd t\u00ean',
+      ]),
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -125,7 +152,12 @@ void main() {
         ],
       );
       final rows = validateRosterRows(file, mapping);
-      expect(rows[0].errors.any((e) => e.contains('MSSV kh\u00f4ng h\u1ee3p l\u1ec7')), isTrue);
+      expect(
+        rows[0].errors.any(
+          (e) => e.contains('MSSV kh\u00f4ng h\u1ee3p l\u1ec7'),
+        ),
+        isTrue,
+      );
     });
 
     test('MSSV qua 20 ky tu bi tu choi', () {
@@ -136,7 +168,12 @@ void main() {
         ],
       );
       final rows = validateRosterRows(file, mapping);
-      expect(rows[0].errors.any((e) => e.contains('MSSV kh\u00f4ng h\u1ee3p l\u1ec7')), isTrue);
+      expect(
+        rows[0].errors.any(
+          (e) => e.contains('MSSV kh\u00f4ng h\u1ee3p l\u1ec7'),
+        ),
+        isTrue,
+      );
     });
 
     test('MSSV chua ky tu dac biet khong hop le', () {
@@ -150,8 +187,11 @@ void main() {
       );
       final rows = validateRosterRows(file, mapping);
       for (final row in rows) {
-        expect(row.errors.any((e) => e.contains('MSSV kh\u00f4ng h\u1ee3p l\u1ec7')), isTrue,
-            reason: 'Row ${row.rowNumber} MSSV=${row.studentCode} phai bao loi');
+        expect(
+          row.errors.any((e) => e.contains('MSSV kh\u00f4ng h\u1ee3p l\u1ec7')),
+          isTrue,
+          reason: 'Row ${row.rowNumber} MSSV=${row.studentCode} phai bao loi',
+        );
       }
     });
 
@@ -235,8 +275,11 @@ void main() {
       );
       final rows = validateRosterRows(file, mapping);
       for (final row in rows) {
-        expect(row.errors.where((e) => e.contains('MSSV')), isEmpty,
-            reason: 'Dong ${row.rowNumber} khong nen co loi MSSV');
+        expect(
+          row.errors.where((e) => e.contains('MSSV')),
+          isEmpty,
+          reason: 'Dong ${row.rowNumber} khong nen co loi MSSV',
+        );
       }
     });
   });

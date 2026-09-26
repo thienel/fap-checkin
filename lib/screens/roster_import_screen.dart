@@ -92,12 +92,51 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       );
       return;
     }
+    final invalidCount = _rows.where((row) => !row.isValid).length;
+    if (invalidCount > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Có $invalidCount dòng lỗi. Hãy sửa file trước khi import.',
+          ),
+        ),
+      );
+      return;
+    }
 
     setState(() {
       _importing = true;
       _progress = 0;
     });
     try {
+      if (_mode == RosterImportMode.replaceInactive) {
+        final deactivated = await widget.api
+            .countRosterReplacementDeactivations(
+              courseClassId: course.id,
+              rows: _rows,
+            );
+        if (!mounted) return;
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Xác nhận thay thế danh sách'),
+            content: Text(
+              'Sẽ cập nhật ${_rows.length} sinh viên và vô hiệu hóa $deactivated sinh viên hiện có không nằm trong file. Bạn có muốn tiếp tục?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Hủy'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Tiếp tục'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+      }
       final result = await widget.api.importRoster(
         courseClassId: course.id,
         fileName: _fileName!,
@@ -112,12 +151,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       if (!mounted) return;
       setState(() => _progress = 1);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Đã import ${result.validRows} sinh viên; '
-            'bỏ qua ${result.invalidRows} dòng không hợp lệ.',
-          ),
-        ),
+        SnackBar(content: Text('Đã import ${result.validRows} sinh viên.')),
       );
     } catch (error) {
       if (mounted) {
@@ -239,7 +273,10 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                   ],
                 ),
                 FilledButton.icon(
-                  onPressed: _importing || _selectedClass == null
+                  onPressed:
+                      _importing ||
+                          _selectedClass == null ||
+                          validCount != _rows.length
                       ? null
                       : _import,
                   icon: const Icon(Icons.cloud_upload_outlined),
@@ -247,6 +284,13 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                 ),
               ],
             ),
+            if (validCount != _rows.length) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Hãy sửa toàn bộ ${_rows.length - validCount} dòng lỗi trước khi import.',
+                style: const TextStyle(color: AppColors.error),
+              ),
+            ],
             if (_importing) ...[
               const SizedBox(height: 10),
               LinearProgressIndicator(value: _progress),

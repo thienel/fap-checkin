@@ -9,10 +9,15 @@ enum RosterField { email, studentCode, fullName }
 enum RosterImportMode { merge, replaceInactive }
 
 class RosterFile {
-  const RosterFile({required this.headers, required this.rows});
+  const RosterFile({
+    required this.headers,
+    required this.rows,
+    this.rowNumbers = const [],
+  });
 
   final List<String> headers;
   final List<List<String>> rows;
+  final List<int> rowNumbers;
 }
 
 class RosterRow {
@@ -61,20 +66,27 @@ RosterFile parseRosterFile(String fileName, Uint8List bytes) {
     throw const FormatException('Chi ho tro file CSV hoac XLSX.');
   }
 
-  final nonEmpty = rawRows
-      .where((row) => row.any((cell) => cell.toString().trim().isNotEmpty))
-      .toList();
+  final nonEmpty = [
+    for (var index = 0; index < rawRows.length; index++)
+      if (rawRows[index].any((cell) => cell.toString().trim().isNotEmpty))
+        (line: index + 1, values: rawRows[index]),
+  ].toList();
   if (nonEmpty.isEmpty) throw const FormatException('File khong co du lieu.');
-  final headers = nonEmpty.first
+  final headers = nonEmpty.first.values
       .map((value) => value.toString().trim())
       .toList();
-  final rows = nonEmpty.skip(1).map((row) {
+  final rows = nonEmpty.skip(1).map((entry) {
+    final row = entry.values;
     return List<String>.generate(
       headers.length,
       (index) => index < row.length ? row[index].toString().trim() : '',
     );
   }).toList();
-  return RosterFile(headers: headers, rows: rows);
+  return RosterFile(
+    headers: headers,
+    rows: rows,
+    rowNumbers: nonEmpty.skip(1).map((entry) => entry.line).toList(),
+  );
 }
 
 Map<RosterField, int?> suggestRosterMapping(List<String> headers) {
@@ -105,12 +117,7 @@ Map<RosterField, int?> suggestRosterMapping(List<String> headers) {
       'studentcode',
       'studentid',
     }),
-    RosterField.fullName: find({
-      'hoten',
-      'hovaten',
-      'fullname',
-      'name',
-    }),
+    RosterField.fullName: find({'hoten', 'hovaten', 'fullname', 'name'}),
   };
 }
 
@@ -183,7 +190,9 @@ List<RosterRow> validateRosterRows(
         if (code.isEmpty) {
           errors.add('Thi\u1ebfu m\u00e3 sinh vi\u00ean');
         } else if (!_studentCodePattern.hasMatch(normalizedCode)) {
-          errors.add('MSSV kh\u00f4ng h\u1ee3p l\u1ec7 (ch\u1ec9 g\u1ed3m 3\u201320 k\u00fd t\u1ef1 A\u2013Z, 0\u20139, _ ho\u1eb7c -)');
+          errors.add(
+            'MSSV kh\u00f4ng h\u1ee3p l\u1ec7 (ch\u1ec9 g\u1ed3m 3\u201320 k\u00fd t\u1ef1 A\u2013Z, 0\u20139, _ ho\u1eb7c -)',
+          );
         } else if (duplicateCodeIdx.contains(index)) {
           errors.add('MSSV tr\u00f9ng trong file');
         }
@@ -192,7 +201,9 @@ List<RosterRow> validateRosterRows(
         if (name.isEmpty) errors.add('Thi\u1ebfu h\u1ecd t\u00ean');
 
         return RosterRow(
-          rowNumber: index + 2,
+          rowNumber: file.rowNumbers.length == file.rows.length
+              ? file.rowNumbers[index]
+              : index + 2,
           email: email,
           studentCode: code,
           fullName: name,

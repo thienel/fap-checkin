@@ -214,14 +214,36 @@ class AttendanceApi {
     );
   });
 
+  Future<int> countRosterReplacementDeactivations({
+    required String courseClassId,
+    required List<RosterRow> rows,
+  }) => _guard(() async {
+    final uid = _teacherUid();
+    final courseReference = _firestore
+        .collection('courseClasses')
+        .doc(courseClassId);
+    final course = await courseReference.get();
+    if (!course.exists || course.data()?['ownerUid'] != uid) {
+      throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+    }
+    final importedIds = {
+      for (final row in rows.where((row) => row.isValid))
+        sha256.convert(utf8.encode(row.emailNormalized)).toString(),
+    };
+    final active = await courseReference
+        .collection('students')
+        .where('active', isEqualTo: true)
+        .get();
+    return active.docs
+        .where((student) => !importedIds.contains(student.id))
+        .length;
+  });
+
   Future<RosterImportResult> importRoster({
     required String courseClassId,
     required String fileName,
     required List<RosterRow> rows,
     required RosterImportMode mode,
-    // Khi true: commit các dòng hợp lệ dù còn dòng lỗi (UI phải hiển thị cảnh báo).
-    // Khi false (mặc định): từ chối toàn bộ nếu còn bất kỳ dòng lỗi nào.
-    bool skipInvalidRows = false,
     void Function(int completed, int total)? onProgress,
   }) => _guard(() async {
     final uid = _teacherUid();
@@ -233,14 +255,14 @@ class AttendanceApi {
       throw const AttendanceApiException('Không tìm thấy môn–lớp.');
     }
 
-    // Task 1.1: Từ chối toàn bộ nếu còn dòng lỗi (trừ khi UI chọn skipInvalidRows).
+    // Không thay đổi roster khi file còn dòng lỗi.
     final invalidRows = rows.where((row) => !row.isValid).toList();
-    if (invalidRows.isNotEmpty && !skipInvalidRows) {
+    if (invalidRows.isNotEmpty) {
       final count = invalidRows.length;
       final firstError = invalidRows.first.errors.first;
       throw AttendanceApiException(
         'File có $count dòng lỗi. Dòng ${invalidRows.first.rowNumber}: $firstError. '
-        'Sửa file hoặc chọn "Bỏ qua dòng lỗi" để tiếp tục.',
+        'Hãy sửa file rồi import lại.',
       );
     }
 
