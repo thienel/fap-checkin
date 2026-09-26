@@ -2211,16 +2211,20 @@ class AttendanceApi {
       rethrow;
     } on FirebaseException catch (error) {
       throw AttendanceApiException(_firebaseMessage(error));
+    } catch (error) {
+      throw AttendanceApiException('Lỗi: $error');
     }
   }
 
   String _firebaseMessage(FirebaseException error) => switch (error.code) {
     'permission-denied' =>
-      'Tài khoản chưa có quyền giảng viên hoặc thao tác không hợp lệ.',
+      'Tài khoản chưa có quyền giảng viên hoặc Firestore Rules chưa được cập nhật (permission-denied).',
     'unavailable' => 'Không thể kết nối Firebase. Hãy kiểm tra mạng.',
     'failed-precondition' =>
       'Firestore cần một index. Hãy deploy firestore.indexes.json.',
-    _ => error.message ?? 'Yêu cầu Firebase thất bại (${error.code}).',
+    _ => (error.message != null && error.message!.trim().isNotEmpty)
+        ? error.message!
+        : 'Yêu cầu Firebase thất bại [mã lỗi: ${error.code}].',
   };
 
   String _isoDate(DateTime value) =>

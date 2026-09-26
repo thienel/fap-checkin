@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -5,14 +6,26 @@ import 'package:flutter/material.dart';
 
 import '../domain/models.dart';
 import '../domain/roster_import.dart';
+import '../firebase_options.dart';
 import '../services/attendance_api.dart';
+import '../services/gemini_ocr_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_ui.dart';
 
+enum OcrScanAction {
+  append,
+  replace,
+}
+
 class RosterImportScreen extends StatefulWidget {
-  const RosterImportScreen({super.key, required this.api});
+  const RosterImportScreen({
+    super.key,
+    required this.api,
+    this.ocrService,
+  });
 
   final AttendanceApi api;
+  final GeminiOcrService? ocrService;
 
   @override
   State<RosterImportScreen> createState() => _RosterImportScreenState();
@@ -29,10 +42,41 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
   bool _importing = false;
   double _progress = 0;
 
+  late final GeminiOcrService _ocr;
+  bool _scanningOcr = false;
+  String _activeApiKey = '';
+  late String _activeModel;
+
+  bool get _isOcrSource =>
+      _fileName != null &&
+      (_fileName!.toLowerCase().endsWith('.png') ||
+          _fileName!.toLowerCase().endsWith('.jpg') ||
+          _fileName!.toLowerCase().endsWith('.jpeg') ||
+          _fileName!.toLowerCase().endsWith('.webp') ||
+          _fileName!.contains(' + '));
+
+  void _clearRoster() {
+    setState(() {
+      _file = null;
+      _fileName = null;
+      _rows = [];
+      _progress = 0;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     _classes = widget.api.getCourseClasses();
+    _activeApiKey = DesktopFirebaseOptions.geminiApiKey;
+    _activeModel = DesktopFirebaseOptions.geminiModel.isNotEmpty
+        ? DesktopFirebaseOptions.geminiModel
+        : 'gemini-3.5-flash-lite';
+    _ocr = widget.ocrService ??
+        GeminiOcrService(
+          apiKey: _activeApiKey,
+          defaultModel: _activeModel,
+        );
   }
 
   Future<void> _pickFile() async {
@@ -44,7 +88,10 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       );
       if (result == null) return;
       final picked = result.files.single;
-      final bytes = picked.bytes;
+      var bytes = picked.bytes;
+      if (bytes == null && picked.path != null) {
+        bytes = await File(picked.path!).readAsBytes();
+      }
       if (bytes == null) {
         throw const FormatException('Không đọc được nội dung file.');
       }
@@ -72,6 +119,381 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       _mapping = {..._mapping, field: index};
       if (_file != null) _rows = validateRosterRows(_file!, _mapping);
     });
+  }
+
+  Future<OcrScanAction?> _showOcrScanModeDialog() async {
+    return showDialog<OcrScanAction>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadii.panel),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.add_photo_alternate_rounded, color: AppColors.primary),
+            SizedBox(width: AppSpace.sm),
+            Text('Tùy chọn quét thêm ảnh'),
+          ],
+        ),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Bảng hiện có ${_rows.length} sinh viên. Thầy/Cô muốn xử lý ảnh mới này như thế nào?',
+                style: const TextStyle(fontSize: 14, height: 1.4),
+              ),
+              const SizedBox(height: AppSpace.lg),
+              InkWell(
+                onTap: () => Navigator.pop(dialogContext, OcrScanAction.append),
+                borderRadius: BorderRadius.circular(AppRadii.control),
+                child: Container(
+                  padding: const EdgeInsets.all(AppSpace.md),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.35),
+                      width: 1.5,
+                    ),
+                    borderRadius: BorderRadius.circular(AppRadii.control),
+                    color: AppColors.primary.withValues(alpha: 0.05),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.playlist_add_rounded,
+                          color: AppColors.primary,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpace.md),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Gộp thêm vào danh sách hiện tại',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primary,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Giữ ${_rows.length} sinh viên hiện tại và thêm sinh viên từ ảnh mới. Tự động bỏ qua các bạn bị trùng MSSV/Email.',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        color: AppColors.primary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpace.md),
+              InkWell(
+                onTap: () => Navigator.pop(dialogContext, OcrScanAction.replace),
+                borderRadius: BorderRadius.circular(AppRadii.control),
+                child: Container(
+                  padding: const EdgeInsets.all(AppSpace.md),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: AppColors.border),
+                    borderRadius: BorderRadius.circular(AppRadii.control),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: const BoxDecoration(
+                          color: AppColors.surfaceMuted,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.refresh_rounded,
+                          color: AppColors.textMuted,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: AppSpace.md),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Quét mới lại từ đầu',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.text,
+                                fontSize: 14,
+                              ),
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              'Xóa toàn bộ danh sách hiện tại và chỉ lấy dữ liệu từ ảnh mới này.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        color: AppColors.textMuted,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, null),
+            child: const Text('Hủy'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickImageForOcr() async {
+    if (_activeApiKey.trim().isEmpty) {
+      final keyProvided = await _showApiKeyDialog();
+      if (!keyProvided) return;
+    }
+
+    OcrScanAction scanAction = OcrScanAction.replace;
+    if (_rows.isNotEmpty) {
+      final selectedAction = await _showOcrScanModeDialog();
+      if (selectedAction == null) return;
+      scanAction = selectedAction;
+    }
+
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+        withData: true,
+      );
+      if (result == null) return;
+      final picked = result.files.single;
+      var bytes = picked.bytes;
+      if (bytes == null && picked.path != null) {
+        bytes = await File(picked.path!).readAsBytes();
+      }
+      if (bytes == null) {
+        throw const FormatException('Không đọc được nội dung tệp ảnh.');
+      }
+
+      setState(() => _scanningOcr = true);
+
+      final lowerName = picked.name.toLowerCase();
+      final mimeType = lowerName.endsWith('.png')
+          ? 'image/png'
+          : lowerName.endsWith('.webp')
+              ? 'image/webp'
+              : 'image/jpeg';
+
+      final scannedItems = await _ocr.scanStudentsFromImage(
+        imageBytes: bytes,
+        mimeType: mimeType,
+        explicitApiKey: _activeApiKey,
+        modelName: _activeModel,
+      );
+
+      if (scannedItems.isEmpty) {
+        throw const FormatException(
+          'AI không tìm thấy sinh viên nào trong bức ảnh. Hãy thử ảnh rõ nét hơn.',
+        );
+      }
+
+      final List<List<String>>? existingData =
+          scanAction == OcrScanAction.append
+              ? _rows.map((r) => [r.studentCode, r.fullName, r.email]).toList()
+              : null;
+
+      final mergedFileName =
+          scanAction == OcrScanAction.append && _fileName != null
+              ? '$_fileName + ${picked.name}'
+              : picked.name;
+
+      final ocrFile = rosterFileFromOcrItems(
+        fileName: mergedFileName,
+        items: scannedItems.map((e) => e.toMap()).toList(),
+        existingRows: existingData,
+      );
+      final mapping = suggestRosterMapping(ocrFile.headers);
+
+      if (!mounted) return;
+      setState(() {
+        _fileName = mergedFileName;
+        _file = ocrFile;
+        _mapping = mapping;
+        _rows = validateRosterRows(ocrFile, mapping);
+      });
+
+      if (scanAction == OcrScanAction.append && existingData != null) {
+        final addedCount = ocrFile.rows.length - existingData.length;
+        final duplicateCount = scannedItems.length - addedCount;
+        final message = duplicateCount > 0
+            ? 'Đã gộp thêm $addedCount sinh viên mới (bỏ qua $duplicateCount bạn bị trùng). Tổng: ${ocrFile.rows.length} sinh viên.'
+            : 'Đã gộp thêm $addedCount sinh viên mới. Tổng: ${ocrFile.rows.length} sinh viên.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppColors.success,
+            content: Text(message),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppColors.success,
+            content: Text(
+              'Quét thành công ${scannedItems.length} sinh viên từ ảnh!',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.error,
+          content: Text('$error'),
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Cài đặt AI',
+            textColor: Colors.white,
+            onPressed: () => _showApiKeyDialog(),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _scanningOcr = false);
+    }
+  }
+
+  Future<bool> _showApiKeyDialog() async {
+    final keyController = TextEditingController(text: _activeApiKey);
+    String tempModel = _activeModel;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadii.panel),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.auto_awesome, color: AppColors.primary),
+              SizedBox(width: AppSpace.sm),
+              Text('Cấu hình AI OCR (Gemini)'),
+            ],
+          ),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Nhập Google Gemini API Key để quét ảnh danh sách sinh viên. Key được lưu trên máy cục bộ.',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 13),
+                ),
+                const SizedBox(height: AppSpace.md),
+                TextField(
+                  controller: keyController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Gemini API Key',
+                    hintText: 'AIzaSy...',
+                    prefixIcon: Icon(Icons.key_rounded),
+                  ),
+                ),
+                const SizedBox(height: AppSpace.md),
+                DropdownButtonFormField<String>(
+                  initialValue: tempModel,
+                  decoration: const InputDecoration(
+                    labelText: 'AI Model',
+                    prefixIcon: Icon(Icons.memory_rounded),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'gemini-3.5-flash-lite',
+                      child: Text('Gemini 3.5 Flash Lite (500 RPD, Nhanh)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'gemini-3.1-flash-lite',
+                      child: Text('Gemini 3.1 Flash Lite (500 RPD)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'gemini-3.8-flash',
+                      child: Text('Gemini 3.8 Flash (Thông minh nhất)'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'gemini-2.5-flash',
+                      child: Text('Gemini 2.5 Flash'),
+                    ),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      setDialogState(() => tempModel = val);
+                    }
+                  },
+                ),
+                const SizedBox(height: AppSpace.sm),
+                const Text(
+                  '💡 Mẹo: Tạo API key miễn phí tại aistudio.google.com',
+                  style: TextStyle(fontSize: 12, color: AppColors.info),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (keyController.text.trim().isNotEmpty) {
+                  Navigator.pop(dialogContext, true);
+                }
+              },
+              child: const Text('Lưu cấu hình'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed == true && keyController.text.trim().isNotEmpty) {
+      setState(() {
+        _activeApiKey = keyController.text.trim();
+        _activeModel = tempModel;
+      });
+      return true;
+    }
+    return false;
   }
 
   Future<void> _import() async {
@@ -153,10 +575,21 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Đã import ${result.validRows} sinh viên.')),
       );
-    } catch (error) {
+    } catch (error, stack) {
+      debugPrint('IMPORT ERROR: $error\n$stack');
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Import thất bại: $error')));
+        final errorText = error.toString().trim();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppColors.error,
+            duration: const Duration(seconds: 8),
+            content: Text(
+              errorText.isNotEmpty
+                  ? 'Import thất bại: $errorText'
+                  : 'Import thất bại: Lỗi giao dịch Firebase ($error)',
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _importing = false);
@@ -174,7 +607,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
           const AppPageHeader(
             title: 'Danh sách sinh viên',
             subtitle:
-                'Chọn tệp CSV hoặc XLSX, kiểm tra dữ liệu rồi nhập vào lớp.',
+                'Chọn tệp CSV/XLSX hoặc Quét ảnh màn hình FAP bằng AI, kiểm tra dữ liệu rồi nhập vào lớp.',
           ),
           const SizedBox(height: AppSpace.xl),
           Wrap(
@@ -198,7 +631,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                             child: Text(course.label),
                           ),
                       ],
-                      onChanged: _importing
+                      onChanged: (_importing || _scanningOcr)
                           ? null
                           : (value) => setState(() => _selectedClass = value),
                     );
@@ -206,10 +639,56 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                 ),
               ),
               FilledButton.tonalIcon(
-                onPressed: _importing ? null : _pickFile,
+                onPressed: (_importing || _scanningOcr) ? null : _pickFile,
                 icon: const Icon(Icons.upload_file),
-                label: Text(_fileName ?? 'Chọn file CSV/XLSX'),
+                label: Text(
+                  _fileName != null && !_isOcrSource
+                      ? _fileName!
+                      : 'Chọn file CSV/XLSX',
+                ),
               ),
+              FilledButton.icon(
+                onPressed: (_importing || _scanningOcr) ? null : _pickImageForOcr,
+                icon: _scanningOcr
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.document_scanner_rounded),
+                label: Text(
+                  _scanningOcr ? 'Đang đọc ảnh AI...' : 'Quét ảnh AI (OCR)',
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+              IconButton.outlined(
+                tooltip: 'Cài đặt Gemini API & Model',
+                onPressed: (_importing || _scanningOcr) ? null : _showApiKeyDialog,
+                icon: const Icon(Icons.auto_awesome, color: AppColors.primary),
+              ),
+              if (_fileName != null)
+                InputChip(
+                  avatar: Icon(
+                    _isOcrSource
+                        ? Icons.image_rounded
+                        : Icons.description_rounded,
+                    size: 16,
+                    color: AppColors.primary,
+                  ),
+                  label: Text(
+                    _fileName!,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  onDeleted: (_importing || _scanningOcr) ? null : _clearRoster,
+                  deleteIconColor: AppColors.textMuted,
+                  tooltip: 'Xóa danh sách hiện tại',
+                ),
             ],
           ),
           if (_file != null) ...[
@@ -254,6 +733,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
               children: [
                 Wrap(
                   spacing: AppSpace.sm,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     _CountChip(
                       label: 'Tổng',
@@ -269,6 +749,17 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                       label: 'Lỗi',
                       value: _rows.length - validCount,
                       tone: AppTone.error,
+                    ),
+                    const SizedBox(width: AppSpace.xs),
+                    OutlinedButton.icon(
+                      onPressed:
+                          (_importing || _scanningOcr) ? null : _clearRoster,
+                      icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                      label: const Text('Xóa bảng'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.textMuted,
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ),
                   ],
                 ),
@@ -328,53 +819,108 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
   Widget _previewTable() {
     return Card(
       clipBehavior: Clip.antiAlias,
-      child: SingleChildScrollView(
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            columns: const [
-              DataColumn(label: Text('Dòng')),
-              DataColumn(label: Text('Email')),
-              DataColumn(label: Text('Mã sinh viên')),
-              DataColumn(label: Text('Họ tên')),
-              DataColumn(label: Text('Kết quả')),
-            ],
-            rows: [
-              for (final row in _rows.take(200))
-                DataRow(
-                  color: row.isValid
-                      ? null
-                      : const WidgetStatePropertyAll(AppColors.errorSurface),
-                  cells: [
-                    DataCell(Text('${row.rowNumber}')),
-                    DataCell(Text(row.email)),
-                    DataCell(Text(row.studentCode)),
-                    DataCell(Text(row.fullName)),
-                    DataCell(
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            row.isValid
-                                ? Icons.check_circle_outline
-                                : Icons.error_outline,
-                            size: 16,
-                            color: row.isValid
-                                ? AppColors.success
-                                : AppColors.error,
-                          ),
-                          const SizedBox(width: AppSpace.sm),
-                          Text(row.isValid ? 'Hợp lệ' : row.errors.join('; ')),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-        ),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadii.panel),
+        side: const BorderSide(color: AppColors.border),
       ),
-    );
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.vertical,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: DataTable(
+                    horizontalMargin: AppSpace.xl,
+                    columnSpacing: 36,
+                    headingRowColor: const WidgetStatePropertyAll(
+                      AppColors.surfaceMuted,
+                    ),
+                    columns: const [
+                      DataColumn(
+                        label: Text(
+                          'Dòng',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Email',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Mã sinh viên',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Text(
+                          'Họ tên',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      DataColumn(
+                        label: Padding(
+                          padding: EdgeInsets.only(right: 28),
+                          child: Text(
+                            'Kết quả',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    ],
+                    rows: [
+                      for (final row in _rows.take(200))
+                        DataRow(
+                          color: row.isValid
+                              ? null
+                              : const WidgetStatePropertyAll(
+                                  AppColors.errorSurface,
+                                ),
+                          cells: [
+                            DataCell(Text('${row.rowNumber}')),
+                            DataCell(Text(row.email)),
+                            DataCell(Text(row.studentCode)),
+                            DataCell(Text(row.fullName)),
+                            DataCell(
+                              Padding(
+                                padding: const EdgeInsets.only(right: 28),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      row.isValid
+                                          ? Icons.check_circle_outline
+                                          : Icons.error_outline,
+                                      size: 16,
+                                      color: row.isValid
+                                          ? AppColors.success
+                                          : AppColors.error,
+                                    ),
+                                    const SizedBox(width: AppSpace.sm),
+                                    Text(
+                                      row.isValid
+                                          ? 'Hợp lệ'
+                                          : row.errors.join('; '),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
   }
 }
 
