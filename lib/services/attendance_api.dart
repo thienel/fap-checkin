@@ -1351,9 +1351,7 @@ class AttendanceApi {
     }
   });
 
-  /// Task 1.4: Điều chỉnh điểm danh hàng loạt với chunked execution.
-  /// Trả về danh sách studentId thất bại với lý do, thay vì throw ngay lần đầu.
-  Future<Map<String, String>> adjustAttendanceBulk({
+  Future<BulkAttendanceResult> adjustAttendanceBulk({
     required String courseClassId,
     required int slot,
     required Iterable<String> studentIds,
@@ -1361,6 +1359,8 @@ class AttendanceApi {
     required String reason,
   }) async {
     final failures = <String, String>{};
+    final pendingSync = <String, String>{};
+    var syncedCount = 0;
     final ids = studentIds.toList();
 
     // Xử lý theo chunks 400 để tránh timeout và cung cấp tiến độ rõ ràng.
@@ -1370,13 +1370,18 @@ class AttendanceApi {
       await Future.wait(
         chunk.map((studentId) async {
           try {
-            await adjustAttendance(
+            final result = await adjustAttendance(
               courseClassId: courseClassId,
               slot: slot,
               studentId: studentId,
               status: status,
               reason: reason,
             );
+            if (result.synced) {
+              syncedCount++;
+            } else {
+              pendingSync[studentId] = result.syncError ?? 'Chưa đồng bộ.';
+            }
           } on AttendanceApiException catch (error) {
             failures[studentId] = error.message;
           } on Exception catch (error) {
@@ -1385,7 +1390,11 @@ class AttendanceApi {
         }),
       );
     }
-    return failures;
+    return BulkAttendanceResult(
+      syncedCount: syncedCount,
+      pendingSync: pendingSync,
+      failures: failures,
+    );
   }
 
   Future<IssuedQr> issueQr(String sessionId) => _guard(() async {
@@ -1934,6 +1943,20 @@ class AttendanceAdjustmentResult {
 
   final bool synced;
   final String? syncError;
+}
+
+class BulkAttendanceResult {
+  const BulkAttendanceResult({
+    required this.syncedCount,
+    required this.pendingSync,
+    required this.failures,
+  });
+
+  final int syncedCount;
+  final Map<String, String> pendingSync;
+  final Map<String, String> failures;
+
+  int get savedCount => syncedCount + pendingSync.length;
 }
 
 class AttendanceApiException implements Exception {

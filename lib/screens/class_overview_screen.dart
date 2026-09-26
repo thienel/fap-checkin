@@ -34,6 +34,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
   final _searchController = TextEditingController();
   final _matrixVerticalController = ScrollController();
   AttendanceStatus? _statusFilter;
+  bool _bulkAdjusting = false;
 
   @override
   void initState() {
@@ -208,7 +209,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
     CourseOverview overview,
     CourseSlotOverview slot,
   ) async {
-    if (!slot.hasOpened) return;
+    if (!slot.hasOpened || _bulkAdjusting) return;
     final students = _filteredStudents(overview)
         .where((item) => item.active)
         .toList();
@@ -218,19 +219,101 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
       initialStatus: AttendanceStatus.excused,
     );
     if (change == null) return;
+    await _runBulkAdjustment(
+      overview: overview,
+      slot: slot,
+      students: students,
+      studentIds: students.map((student) => student.id).toList(),
+      status: change.status,
+      reason: change.reason,
+    );
+  }
+
+  Future<void> _runBulkAdjustment({
+    required CourseOverview overview,
+    required CourseSlotOverview slot,
+    required List<CourseStudent> students,
+    required List<String> studentIds,
+    required AttendanceStatus status,
+    required String reason,
+  }) async {
+    if (_bulkAdjusting) return;
+    setState(() => _bulkAdjusting = true);
+    List<String>? retryIds;
     try {
-      await widget.api.adjustAttendanceBulk(
+      final result = await widget.api.adjustAttendanceBulk(
         courseClassId: overview.courseClassId,
         slot: slot.number,
-        studentIds: students.map((item) => item.id),
-        status: change.status,
-        reason: change.reason,
+        studentIds: studentIds,
+        status: status,
+        reason: reason,
       );
-      if (mounted) _refresh();
+      if (!mounted) return;
+      _refresh();
+      final names = {
+        for (final student in students) student.id: student.displayName,
+      };
+      final retry = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(
+            'Đã lưu ${result.savedCount}/${studentIds.length} sinh viên',
+          ),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Đã đồng bộ Sheets: ${result.syncedCount}'),
+                  Text('Đã lưu, chờ Sheets: ${result.pendingSync.length}'),
+                  Text('Chưa lưu: ${result.failures.length}'),
+                  if (result.failures.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    for (final entry in result.failures.entries)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          '${names[entry.key] ?? entry.key}: ${entry.value}',
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Đóng'),
+            ),
+            if (result.failures.isNotEmpty)
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text('Thử lại ${result.failures.length} trường hợp'),
+              ),
+          ],
+        ),
+      );
+      if (retry == true) retryIds = result.failures.keys.toList();
     } catch (error) {
       if (!mounted) return;
+      _refresh();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Không thể điều chỉnh hàng loạt: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _bulkAdjusting = false);
+    }
+    if (retryIds != null && mounted) {
+      await _runBulkAdjustment(
+        overview: overview,
+        slot: slot,
+        students: students,
+        studentIds: retryIds,
+        status: status,
+        reason: reason,
       );
     }
   }
@@ -898,8 +981,12 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                     if (slot.hasOpened)
                                       IconButton(
                                         tooltip: 'Điều chỉnh tất cả sinh viên đang lọc',
-                                        onPressed: () =>
-                                            _editAttendanceBulk(overview, slot),
+                                        onPressed: _bulkAdjusting
+                                            ? null
+                                            : () => _editAttendanceBulk(
+                                                overview,
+                                                slot,
+                                              ),
                                         icon: const Icon(
                                           Icons.playlist_add_check,
                                           size: 18,
