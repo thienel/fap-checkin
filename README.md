@@ -100,7 +100,7 @@ npm --prefix web-checkin install
 firebase deploy --only firestore,hosting
 ```
 
-Không chạy `--only functions` vì Cloud Functions cần Blaze. `firebase.json` hiện không còn cấu hình deploy Functions; thư mục `functions/` chỉ được giữ làm mã legacy để đối chiếu và có thể xóa sau.
+`firebase.json` chỉ cấu hình Firestore và Hosting. Vì vậy cả lệnh deploy mặc định cũng không triển khai Cloud Functions. Thư mục `functions/` là mã legacy để đối chiếu, không thuộc luồng desktop + Rules + Apps Script hiện tại.
 
 ### Deploy Firestore an toàn
 
