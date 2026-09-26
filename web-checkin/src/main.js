@@ -92,6 +92,9 @@ function readableError(error, userEmail = '') {
   if (msg.includes('qr-expired')) {
     return 'QR đã hết hạn. Hãy quét lại mã mới nhất trên màn hình giảng viên.';
   }
+  if (msg.includes('checkin-state-changed')) {
+    return 'QR, mã xác nhận hoặc phiên điểm danh có thể đã thay đổi. Hãy quét QR mới nhất và thử lại; nếu vẫn lỗi, liên hệ giảng viên.';
+  }
   if (msg.includes('student-email-mismatch')) {
     return `Email Google (${userEmail || ''}) không khớp với email đã đăng ký trong danh sách lớp.`;
   }
@@ -264,7 +267,7 @@ async function writeCheckIn(user, checkoutCode) {
       if (validationStage === 'qr') throw new Error('qr-expired');
       if (validationStage === 'session') throw new Error('session-stopped');
       if (validationStage === 'roster') throw new Error('student-not-in-roster');
-      if (validationStage === 'checkout') throw new Error('checkout-code-invalid');
+      if (validationStage === 'checkout') throw new Error('checkin-state-changed');
     }
     throw error;
   }
