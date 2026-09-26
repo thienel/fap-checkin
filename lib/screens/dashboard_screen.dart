@@ -137,8 +137,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) _refresh();
     } catch (error) {
       if (!mounted) return;
+      AttendanceSession? active;
+      Object? verificationError;
+      try {
+        active = await widget.api.getActiveAttendance();
+      } catch (readError) {
+        verificationError = readError;
+      }
+      if (!mounted) return;
+      _refresh();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Không thể bắt đầu điểm danh: $error')),
+        SnackBar(
+          content: Text(
+            active != null
+                ? 'Phiên đã được tạo nhưng chưa hoàn tất thiết lập. '
+                      'Nhấn "Mở lại phiên" để tiếp tục: $error'
+                : verificationError != null
+                ? 'Chưa xác minh được phiên đã mở hay chưa. '
+                      'Hãy làm mới và kiểm tra phiên đang hoạt động: $verificationError'
+                : 'Không thể bắt đầu điểm danh: $error',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _resumeActiveSession() async {
+    try {
+      final session = await widget.api.resumeActiveAttendance();
+      if (!mounted) return;
+      if (session == null) {
+        _refresh();
+        return;
+      }
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => SessionScreen(api: widget.api, session: session),
+        ),
+      );
+      if (mounted) _refresh();
+    } catch (error) {
+      if (!mounted) return;
+      _refresh();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Chưa thể hoàn tất thiết lập phiên: $error')),
       );
     }
   }
@@ -948,7 +990,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       IconButton(
                         tooltip:
                             '${widget.user.email ?? 'Giảng viên'} · Đăng xuất',
-                        onPressed: FirebaseAuth.instance.signOut,
+                        onPressed: () => FirebaseAuth.instance.signOut(),
                         icon: const Icon(Icons.logout_outlined),
                       )
                     else ...[
@@ -960,7 +1002,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                       const SizedBox(height: AppSpace.sm),
                       OutlinedButton.icon(
-                        onPressed: FirebaseAuth.instance.signOut,
+                        onPressed: () => FirebaseAuth.instance.signOut(),
                         icon: const Icon(Icons.logout_outlined, size: 18),
                         label: const Text('Đăng xuất'),
                       ),
@@ -1039,6 +1081,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             FutureBuilder<AttendanceSession?>(
                               future: _activeSession,
                               builder: (context, snapshot) {
+                                if (snapshot.hasError) {
+                                  return Padding(
+                                    padding: const EdgeInsets.only(
+                                      bottom: AppSpace.lg,
+                                    ),
+                                    child: AppNotice(
+                                      tone: AppTone.warning,
+                                      message:
+                                          'Chưa tải được trạng thái phiên: ${snapshot.error}',
+                                      action: TextButton(
+                                        onPressed: _refresh,
+                                        child: const Text('Thử lại'),
+                                      ),
+                                    ),
+                                  );
+                                }
                                 final session = snapshot.data;
                                 if (session == null) {
                                   return const SizedBox.shrink();
@@ -1056,17 +1114,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                         'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''}'
                                         '${session.daySlot == null ? '' : ' · Slot ${session.daySlot} trong ngày'}',
                                     action: TextButton.icon(
-                                      onPressed: () async {
-                                        await Navigator.of(context).push(
-                                          MaterialPageRoute<void>(
-                                            builder: (_) => SessionScreen(
-                                              api: widget.api,
-                                              session: session,
-                                            ),
-                                          ),
-                                        );
-                                        if (mounted) _refresh();
-                                      },
+                                      onPressed: _resumeActiveSession,
                                       icon: const Icon(Icons.open_in_new),
                                       label: const Text('Mở lại phiên'),
                                     ),

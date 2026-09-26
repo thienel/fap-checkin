@@ -1000,6 +1000,21 @@ class AttendanceApi {
     });
   });
 
+  Future<AttendanceSession?> resumeActiveAttendance() => _guard(() async {
+    final session = await getActiveAttendance();
+    if (session == null) return null;
+    await _materializeAlwaysExcused(
+      sessionId: session.id,
+      courseClassId: session.courseClassId,
+      subject: session.subject,
+      classCode: session.classCode,
+      slot: session.slot,
+      date: session.date,
+      ownerUid: _teacherUid(),
+    );
+    return session;
+  });
+
   Future<AttendanceSession> startAttendance({
     required TodaySlot slot,
     required int rotationSeconds,
