@@ -248,9 +248,6 @@ class AttendanceApi {
     final students = courseReference.collection('students');
     final claims = courseReference.collection('studentCodeClaims');
     final existingSnapshot = await students.get();
-    final existing = {
-      for (final doc in existingSnapshot.docs) doc.id: doc.data(),
-    };
 
     // Task 1.1: Preflight – MSSV đã thuộc email khác trong roster hiện tại → reject.
     // Build map: studentCodeNormalized -> studentId hiện tại trong Firestore.
@@ -288,57 +285,123 @@ class AttendanceApi {
               .where((doc) => !importedIds.contains(doc.id))
               .toList()
         : <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-    // One Firestore batch includes every roster change and the import receipt.
-    // A failed batch leaves the active roster intact. Larger imports need a
+    // One Firestore transaction includes every roster change and the import receipt.
+    // A failed transaction leaves the active roster intact. Larger imports need a
     // versioned roster design before they can be safely supported.
-    final totalWrites = validRows.length * 2 + deactivated.length + 1;
+    final totalWrites = validRows.length * 3 + deactivated.length + 1;
     if (totalWrites > 500) {
       throw AttendanceApiException(
-        'Import cần $totalWrites thao tác, vượt giới hạn an toàn 500 của một batch. '
+        'Import cần tối đa $totalWrites thao tác, vượt giới hạn an toàn 500 của một transaction. '
         'Hãy chia file thành các lần merge nhỏ hơn; chế độ thay thế cần file nhỏ hơn.',
       );
     }
-    final batch = _firestore.batch();
-    for (final document in deactivated) {
-      batch.update(document.reference, {
-        'active': false,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'updatedBy': uid,
-      });
-    }
-    for (final row in validRows) {
-      final studentId = sha256
-          .convert(utf8.encode(row.emailNormalized))
-          .toString();
-      final previous = existing[studentId];
-      final code = row.studentCodeNormalized;
-      batch.set(students.doc(studentId), {
-        'emailNormalized': row.emailNormalized,
-        'email': row.email.trim(),
-        'studentCode': row.studentCode.trim(),
-        'studentCodeNormalized': code,
-        'fullName': row.fullName.trim(),
-        'attendancePolicy': previous?['attendancePolicy'] ?? 'normal',
-        'active': true,
-        'importedAt': FieldValue.serverTimestamp(),
-        'importedBy': uid,
-      }, SetOptions(merge: true));
-      batch.set(claims.doc(code), {
-        'studentId': studentId,
-        'ownerUid': uid,
+    final receipt = courseReference.collection('imports').doc();
+    await _firestore.runTransaction((transaction) async {
+      final currentCourse = await transaction.get(courseReference);
+      if (!currentCourse.exists || currentCourse.data()?['ownerUid'] != uid) {
+        throw const AttendanceApiException('Không tìm thấy môn–lớp.');
+      }
+      final currentStudents =
+          <String, DocumentSnapshot<Map<String, dynamic>>>{};
+      for (final row in validRows) {
+        final studentId = sha256
+            .convert(utf8.encode(row.emailNormalized))
+            .toString();
+        currentStudents[studentId] = await transaction.get(
+          students.doc(studentId),
+        );
+      }
+      final currentDeactivated = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final document in deactivated) {
+        currentDeactivated.add(await transaction.get(document.reference));
+      }
+      final claimCodes = <String>{
+        for (final row in validRows) row.studentCodeNormalized,
+      };
+      for (final row in validRows) {
+        final studentId = sha256
+            .convert(utf8.encode(row.emailNormalized))
+            .toString();
+        final previous = currentStudents[studentId]?.data();
+        final oldCode = normalizeStudentCode(
+          previous?['studentCodeNormalized'] as String? ??
+              previous?['studentCode'] as String? ??
+              '',
+        );
+        if (oldCode.isNotEmpty && oldCode != row.studentCodeNormalized) {
+          claimCodes.add(oldCode);
+        }
+      }
+      final currentClaims = <String, DocumentSnapshot<Map<String, dynamic>>>{};
+      for (final code in claimCodes) {
+        currentClaims[code] = await transaction.get(claims.doc(code));
+      }
+      for (final row in validRows) {
+        final studentId = sha256
+            .convert(utf8.encode(row.emailNormalized))
+            .toString();
+        final claimOwner = currentClaims[row.studentCodeNormalized]
+            ?.data()?['studentId'];
+        if (claimOwner != null && claimOwner != studentId) {
+          throw AttendanceApiException(
+            'MSSV ${row.studentCode} (dòng ${row.rowNumber}) đã thuộc sinh viên khác.',
+          );
+        }
+      }
+
+      for (final document in currentDeactivated) {
+        if (!document.exists || document.data()?['active'] != true) continue;
+        transaction.update(document.reference, {
+          'active': false,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedBy': uid,
+        });
+      }
+      for (final row in validRows) {
+        final studentId = sha256
+            .convert(utf8.encode(row.emailNormalized))
+            .toString();
+        final previous = currentStudents[studentId]?.data();
+        final code = row.studentCodeNormalized;
+        final oldCode = normalizeStudentCode(
+          previous?['studentCodeNormalized'] as String? ??
+              previous?['studentCode'] as String? ??
+              '',
+        );
+        transaction.set(students.doc(studentId), {
+          'emailNormalized': row.emailNormalized,
+          'email': row.email.trim(),
+          'studentCode': row.studentCode.trim(),
+          'studentCodeNormalized': code,
+          'fullName': row.fullName.trim(),
+          'attendancePolicy': previous?['attendancePolicy'] ?? 'normal',
+          'active': true,
+          'importedAt': FieldValue.serverTimestamp(),
+          'importedBy': uid,
+        }, SetOptions(merge: true));
+        if (oldCode.isNotEmpty &&
+            oldCode != code &&
+            currentClaims[oldCode]?.data()?['studentId'] == studentId) {
+          transaction.delete(claims.doc(oldCode));
+        }
+        if (currentClaims[code]?.exists != true) {
+          transaction.set(claims.doc(code), {
+            'studentId': studentId,
+            'ownerUid': uid,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+        }
+      }
+      transaction.set(receipt, {
+        'fileName': fileName,
+        'totalRows': rows.length,
+        'validRows': validRows.length,
+        'invalidRows': rows.length - validRows.length,
+        'mode': mode.name,
         'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
-    batch.set(courseReference.collection('imports').doc(), {
-      'fileName': fileName,
-      'totalRows': rows.length,
-      'validRows': validRows.length,
-      'invalidRows': rows.length - validRows.length,
-      'mode': mode.name,
-      'createdAt': FieldValue.serverTimestamp(),
-      'createdBy': uid,
+        'createdBy': uid,
+      });
     });
-    await batch.commit();
     onProgress?.call(totalWrites, totalWrites);
     return RosterImportResult(
       totalRows: rows.length,

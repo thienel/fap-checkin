@@ -520,6 +520,46 @@ test('[teacherScheduleLocks deny] update lock bi tu choi', async () => {
   );
 });
 
+test('an old student code can be reclaimed without allowing two owners', async () => {
+  const db = testEnvironment.authenticatedContext(teacherUid).firestore();
+  const students = collection(db, 'courseClasses', courseClassId, 'students');
+  const claims = collection(db, 'courseClasses', courseClassId, 'studentCodeClaims');
+  const first = doc(students, 'student-import-x');
+  const second = doc(students, 'student-import-y');
+  const oldClaim = doc(claims, 'SE70A');
+  await assertSucceeds(setDoc(first, {
+    email: 'x@fpt.edu.vn', emailNormalized: 'x@fpt.edu.vn',
+    studentCode: 'SE70A', studentCodeNormalized: 'SE70A', fullName: 'X',
+    active: true, attendancePolicy: 'normal', importedBy: teacherUid,
+  }));
+  await assertSucceeds(setDoc(oldClaim, { studentId: first.id, ownerUid: teacherUid }));
+
+  const change = writeBatch(db);
+  change.update(first, { studentCode: 'SE70B', studentCodeNormalized: 'SE70B' });
+  change.delete(oldClaim);
+  change.set(doc(claims, 'SE70B'), { studentId: first.id, ownerUid: teacherUid });
+  await assertSucceeds(change.commit());
+
+  const reuse = writeBatch(db);
+  reuse.set(second, {
+    email: 'y@fpt.edu.vn', emailNormalized: 'y@fpt.edu.vn',
+    studentCode: 'SE70A', studentCodeNormalized: 'SE70A', fullName: 'Y',
+    active: true, attendancePolicy: 'normal', importedBy: teacherUid,
+  });
+  reuse.set(oldClaim, { studentId: second.id, ownerUid: teacherUid });
+  await assertSucceeds(reuse.commit());
+  await assertFails(setDoc(oldClaim, { studentId: first.id, ownerUid: teacherUid }));
+
+  const concurrentClaim = doc(claims, 'SE70C');
+  const attempts = await Promise.allSettled([
+    setDoc(concurrentClaim, { studentId: first.id, ownerUid: teacherUid }),
+    setDoc(concurrentClaim, { studentId: second.id, ownerUid: teacherUid }),
+  ]);
+  if (attempts.filter((result) => result.status === 'fulfilled').length !== 1) {
+    throw new Error('Exactly one concurrent claim must succeed.');
+  }
+});
+
 test('teacher edits advance revision while sync metadata preserves it', async () => {
   const db = testEnvironment.authenticatedContext(teacherUid).firestore();
   const record = doc(db, 'attendance', courseClassId, 'slots', '1', 'records', 'student-hash-2');
