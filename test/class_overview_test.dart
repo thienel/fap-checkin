@@ -114,4 +114,52 @@ void main() {
     expect(overview.attendedCount(student), 1);
     expect(overview.syncErrorCount, 1);
   });
+
+  test('slot active chờ điểm danh và không làm thay đổi tỷ lệ chính thức', () {
+    CourseOverview build(CourseSlotState state) => CourseOverview(
+      courseClassId: 'PRM_SE01',
+      subject: 'PRM',
+      classCode: 'SE01',
+      students: const [student],
+      slots: [
+        slots[0],
+        CourseSlotOverview(
+          number: 2,
+          date: '2026-09-08',
+          daySlot: 1,
+          state: state,
+          sessionIds: state == CourseSlotState.notOpened ? [] : ['session-2'],
+        ),
+      ],
+      entries: {
+        attendanceEntryKey('student-1', 1): const AttendanceEntry(
+          studentId: 'student-1',
+          slot: 1,
+          status: AttendanceStatus.present,
+          source: 'qr',
+          syncStatus: 'synced',
+        ),
+      },
+    );
+
+    final before = build(CourseSlotState.notOpened);
+    final active = build(CourseSlotState.active);
+    final completed = build(CourseSlotState.completed);
+    expect(
+      before.statusFor(student.id, before.slots[1]),
+      AttendanceStatus.notYetOpen,
+    );
+    expect(
+      active.statusFor(student.id, active.slots[1]),
+      AttendanceStatus.pending,
+    );
+    expect(
+      completed.statusFor(student.id, completed.slots[1]),
+      AttendanceStatus.absent,
+    );
+    expect(before.attendanceRate, 1);
+    expect(active.attendanceRate, 1);
+    expect(completed.attendanceRate, .5);
+    expect(active.attendedCount(student), 1);
+  });
 }

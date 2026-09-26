@@ -1,4 +1,4 @@
-enum AttendanceStatus { present, absent, excused, notYetOpen }
+enum AttendanceStatus { present, absent, excused, pending, notYetOpen }
 
 enum AbsenceRiskLevel { none, warning, examRisk }
 
@@ -113,9 +113,11 @@ class CourseOverview {
   AttendanceStatus statusFor(String studentId, CourseSlotOverview slot) {
     final entry = entryFor(studentId, slot.number);
     if (entry != null) return entry.status;
-    return slot.hasOpened
-        ? AttendanceStatus.absent
-        : AttendanceStatus.notYetOpen;
+    return switch (slot.state) {
+      CourseSlotState.notOpened => AttendanceStatus.notYetOpen,
+      CourseSlotState.active => AttendanceStatus.pending,
+      CourseSlotState.completed => AttendanceStatus.absent,
+    };
   }
 
   int get activeStudentCount => students.where((item) => item.active).length;
@@ -130,12 +132,17 @@ class CourseOverview {
   }
 
   int attendedCount(CourseStudent student) => slots.where((slot) {
+    if (slot.state != CourseSlotState.completed) return false;
     final status = statusFor(student.id, slot);
     return status == AttendanceStatus.present;
   }).length;
 
   int excusedCount(CourseStudent student) => slots
-      .where((slot) => statusFor(student.id, slot) == AttendanceStatus.excused)
+      .where(
+        (slot) =>
+            slot.state == CourseSlotState.completed &&
+            statusFor(student.id, slot) == AttendanceStatus.excused,
+      )
       .length;
 
   int absentCount(CourseStudent student) => slots.where((slot) {
@@ -143,9 +150,8 @@ class CourseOverview {
         statusFor(student.id, slot) == AttendanceStatus.absent;
   }).length;
 
-  double absenceRate(CourseStudent student) => slots.isEmpty
-      ? 0
-      : absentCount(student) / slots.length;
+  double absenceRate(CourseStudent student) =>
+      slots.isEmpty ? 0 : absentCount(student) / slots.length;
 
   AbsenceRiskLevel absenceRiskFor(CourseStudent student) {
     if (!student.active || student.isAlwaysExcused || slots.isEmpty) {
@@ -170,7 +176,9 @@ class CourseOverview {
     var attended = 0;
     var eligible = 0;
     for (final student in activeStudents) {
-      for (final slot in slots.where((item) => item.hasOpened)) {
+      for (final slot in slots.where(
+        (item) => item.state == CourseSlotState.completed,
+      )) {
         final status = statusFor(student.id, slot);
         if (status == AttendanceStatus.excused) continue;
         eligible++;
@@ -186,11 +194,11 @@ class CourseOverview {
       entries.values.where((entry) => entry.syncStatus == 'error').length;
 
   int get atRiskStudentCount {
-    if (openedSlotCount == 0) return 0;
+    if (completedSlotCount == 0) return 0;
     return students.where((student) {
       if (!student.active) return false;
       final excused = excusedCount(student);
-      final denominator = openedSlotCount - excused;
+      final denominator = completedSlotCount - excused;
       return denominator > 0 && attendedCount(student) / denominator < .8;
     }).length;
   }

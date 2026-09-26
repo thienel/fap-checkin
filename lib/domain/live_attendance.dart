@@ -36,7 +36,9 @@ class LiveStudentAttendance {
 
   /// Kiểm tra xem sinh viên đã điểm danh hay chưa
   bool get isPresent => status == AttendanceStatus.present;
-  bool get isNotYetOpen => status == AttendanceStatus.notYetOpen;
+  bool get isNotYetOpen =>
+      status == AttendanceStatus.pending ||
+      status == AttendanceStatus.notYetOpen;
   bool get isExcused => status == AttendanceStatus.excused;
   bool get isAbsent => status == AttendanceStatus.absent;
 
@@ -119,6 +121,7 @@ class LiveSessionStats {
           present++;
           break;
         case AttendanceStatus.notYetOpen:
+        case AttendanceStatus.pending:
           notYet++;
           break;
         case AttendanceStatus.excused:
@@ -160,10 +163,7 @@ class LiveAttendanceError extends LiveAttendanceState {
 }
 
 class LiveAttendanceLoaded extends LiveAttendanceState {
-  const LiveAttendanceLoaded({
-    required this.students,
-    required this.stats,
-  });
+  const LiveAttendanceLoaded({required this.students, required this.stats});
 
   final List<LiveStudentAttendance> students;
   final LiveSessionStats stats;

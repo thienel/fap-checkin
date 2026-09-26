@@ -42,28 +42,31 @@ void main() {
       attendancePolicy: AttendancePolicy.normal,
     );
 
-    test('Lớp 3 sinh viên, chưa ai quét mã: hiển thị 3 sinh viên Chưa điểm danh', () {
-      final state = LiveSessionService.combineRosterAndRecords(
-        roster: [student1, student2, student3],
-        records: [],
-      );
+    test(
+      'Lớp 3 sinh viên, chưa ai quét mã: hiển thị 3 sinh viên Chưa điểm danh',
+      () {
+        final state = LiveSessionService.combineRosterAndRecords(
+          roster: [student1, student2, student3],
+          records: [],
+        );
 
-      expect(state, isA<LiveAttendanceLoaded>());
-      final loaded = state as LiveAttendanceLoaded;
+        expect(state, isA<LiveAttendanceLoaded>());
+        final loaded = state as LiveAttendanceLoaded;
 
-      expect(loaded.students.length, 3);
-      expect(loaded.stats.totalActive, 3);
-      expect(loaded.stats.presentCount, 0);
-      expect(loaded.stats.notYetOpenCount, 3);
-      expect(loaded.stats.rate, 0.0);
+        expect(loaded.students.length, 3);
+        expect(loaded.stats.totalActive, 3);
+        expect(loaded.stats.presentCount, 0);
+        expect(loaded.stats.notYetOpenCount, 3);
+        expect(loaded.stats.rate, 0.0);
 
-      // Tất cả đều có status notYetOpen
-      for (final s in loaded.students) {
-        expect(s.status, AttendanceStatus.notYetOpen);
-        expect(s.isNotYetOpen, isTrue);
-        expect(s.checkedInAt, isNull);
-      }
-    });
+        // Tất cả đều có status notYetOpen
+        for (final s in loaded.students) {
+          expect(s.status, AttendanceStatus.pending);
+          expect(s.isNotYetOpen, isTrue);
+          expect(s.checkedInAt, isNull);
+        }
+      },
+    );
 
     test('1 sinh viên quét mã thành công: chỉ sinh viên đó đổi sang Đã điểm danh, count = 1/3, không sinh thêm dòng', () {
       final checkInTime = DateTime(2026, 9, 22, 18, 30, 0);
@@ -97,10 +100,10 @@ void main() {
       expect(vy.checkedInAt, checkInTime);
 
       final khoi = loaded.students.firstWhere((s) => s.id == 's2');
-      expect(khoi.status, AttendanceStatus.notYetOpen);
+      expect(khoi.status, AttendanceStatus.pending);
 
       final thien = loaded.students.firstWhere((s) => s.id == 's3');
-      expect(thien.status, AttendanceStatus.notYetOpen);
+      expect(thien.status, AttendanceStatus.pending);
     });
 
     test('Quét lặp (duplicate) không làm tăng count hoặc thay đổi thời gian điểm danh', () {
@@ -178,7 +181,10 @@ void main() {
       );
 
       expect(state, isA<LiveAttendanceEmpty>());
-      expect((state as LiveAttendanceEmpty).message, contains('chưa có sinh viên'));
+      expect(
+        (state as LiveAttendanceEmpty).message,
+        contains('chưa có sinh viên'),
+      );
     });
 
     test('Sinh viên vừa check-in được đưa lên đầu danh sách (isRecent), các bạn khác sắp xếp theo MSSV', () {

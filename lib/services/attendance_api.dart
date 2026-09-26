@@ -1223,7 +1223,8 @@ class AttendanceApi {
     required AttendanceStatus status,
     required String reason,
   }) => _guard(() async {
-    if (status == AttendanceStatus.notYetOpen) {
+    if (status == AttendanceStatus.notYetOpen ||
+        status == AttendanceStatus.pending) {
       throw const AttendanceApiException('Không thể ghi trạng thái chưa mở.');
     }
     final normalizedReason = reason.trim();
@@ -1865,6 +1866,9 @@ class AttendanceApi {
     AttendanceStatus.excused => 'excused',
     AttendanceStatus.notYetOpen => throw const AttendanceApiException(
       'Không thể lưu trạng thái chưa mở.',
+    ),
+    AttendanceStatus.pending => throw const AttendanceApiException(
+      'Không thể lưu trạng thái chưa điểm danh.',
     ),
   };
 

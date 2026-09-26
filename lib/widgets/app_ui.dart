@@ -248,6 +248,11 @@ class AppAttendanceBadge extends StatelessWidget {
         Icons.schedule_outlined,
         AppTone.warning,
       ),
+      AttendanceStatus.pending => (
+        'Chưa điểm danh',
+        Icons.schedule_outlined,
+        AppTone.warning,
+      ),
     };
     final sourceLabel = switch (source) {
       'teacher' => 'Giảng viên chỉnh tay',

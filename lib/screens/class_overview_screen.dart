@@ -95,7 +95,9 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
     required AttendanceStatus initialStatus,
   }) async {
     var reason = '';
-    var selected = initialStatus == AttendanceStatus.notYetOpen
+    var selected =
+        initialStatus == AttendanceStatus.notYetOpen ||
+            initialStatus == AttendanceStatus.pending
         ? AttendanceStatus.absent
         : initialStatus;
     final result = await showDialog<({AttendanceStatus status, String reason})>(
@@ -632,10 +634,10 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
           student.email,
           for (final slot in overview.slots)
             _statusLabel(overview.statusFor(student.id, slot)),
-          '${overview.attendedCount(student)}/${overview.openedSlotCount}',
+          '${overview.attendedCount(student)}/${overview.completedSlotCount}',
         ],
       [],
-      ['Chú giải', 'Có mặt; Vắng; Có phép; Nhập tay; Chưa mở'],
+      ['Chú giải', 'Có mặt; Vắng; Có phép; Nhập tay; Chưa điểm danh; Chưa mở'],
     ];
     await _saveCsv(
       '${overview.subject}_${overview.classCode}_attendance_matrix.csv',
@@ -905,6 +907,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
               SizedBox(
                 width: 190,
                 child: DropdownButtonFormField<AttendanceStatus?>(
+                  isExpanded: true,
                   initialValue: _statusFilter,
                   decoration: const InputDecoration(
                     labelText: 'Lọc trạng thái',
@@ -915,7 +918,10 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                     for (final status in AttendanceStatus.values)
                       DropdownMenuItem(
                         value: status,
-                        child: Text(_statusLabel(status)),
+                        child: Text(
+                          _statusLabel(status),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                   ],
                   onChanged: (value) => setState(() => _statusFilter = value),
@@ -1064,7 +1070,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                                   ),
                                   DataCell(
                                     Text(
-                                      '${overview.attendedCount(student)}/${overview.openedSlotCount}',
+                                      '${overview.attendedCount(student)}/${overview.completedSlotCount}',
                                     ),
                                   ),
                                   DataCell(
@@ -1222,9 +1228,15 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                   Chip(label: Text('Có mặt $present')),
                   Chip(
                     label: Text(
-                      'Vắng ${slot.hasOpened ? overview.activeStudentCount - present - excused : 0}',
+                      'Vắng ${slot.state == CourseSlotState.completed ? overview.activeStudentCount - present - excused : 0}',
                     ),
                   ),
+                  if (slot.state == CourseSlotState.active)
+                    Chip(
+                      label: Text(
+                        'Chưa điểm danh ${overview.activeStudentCount - present - excused}',
+                      ),
+                    ),
                   Chip(label: Text('Có phép $excused')),
                   Chip(label: Text('Phiên ${slot.sessionIds.length}')),
                 ],
@@ -1293,6 +1305,7 @@ String _statusLabel(AttendanceStatus status) => switch (status) {
   AttendanceStatus.absent => 'Vắng',
   AttendanceStatus.excused => 'Có phép',
   AttendanceStatus.notYetOpen => 'Chưa mở',
+  AttendanceStatus.pending => 'Chưa điểm danh',
 };
 
 class _AbsenceIndicator extends StatelessWidget {

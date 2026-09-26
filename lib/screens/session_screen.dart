@@ -475,7 +475,9 @@ class _SessionScreenState extends State<SessionScreen> {
   Future<({AttendanceStatus status, String reason})?> _attendanceChangeDialog(
     LiveStudentAttendance attendance,
   ) {
-    var selected = attendance.status == AttendanceStatus.notYetOpen
+    var selected =
+        attendance.status == AttendanceStatus.notYetOpen ||
+            attendance.status == AttendanceStatus.pending
         ? AttendanceStatus.absent
         : attendance.status;
     var reason = '';
@@ -590,6 +592,7 @@ class _SessionScreenState extends State<SessionScreen> {
     AttendanceStatus.absent => 'Vắng',
     AttendanceStatus.excused => 'Có phép',
     AttendanceStatus.notYetOpen => 'Chưa điểm danh',
+    AttendanceStatus.pending => 'Chưa điểm danh',
   };
 
   @override
