@@ -228,6 +228,7 @@ class _SessionScreenState extends State<SessionScreen> {
   }
 
   Future<void> _stop() async {
+    if (_stopping) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -255,7 +256,7 @@ class _SessionScreenState extends State<SessionScreen> {
       ),
     );
 
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted || _stopping) return;
 
     setState(() {
       _stopping = true;
@@ -298,11 +299,9 @@ class _SessionScreenState extends State<SessionScreen> {
     _countdownTimer?.cancel();
     _checkoutRetryTimer?.cancel();
     _qrRetryTimer?.cancel();
-    if (warnings.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đã ngừng phiên. ${warnings.join(' ')}')),
-      );
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Đã ngừng phiên. ${warnings.join(' ')}'.trim())),
+    );
     setState(() => _stopCompleted = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) Navigator.of(context).pop();
@@ -676,7 +675,9 @@ class _SessionScreenState extends State<SessionScreen> {
           actions: [
             if (MediaQuery.sizeOf(context).width < 600)
               IconButton(
-                tooltip: 'Ngừng điểm danh',
+                tooltip: _stopping
+                    ? 'Đang ngừng điểm danh…'
+                    : 'Ngừng điểm danh',
                 onPressed: _stopping ? null : _stop,
                 icon: _stopping
                     ? const SizedBox.square(
@@ -703,9 +704,9 @@ class _SessionScreenState extends State<SessionScreen> {
                           ),
                         )
                       : const Icon(Icons.stop_circle_outlined, size: 20),
-                  label: const Text(
-                    'Ngừng điểm danh',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                  label: Text(
+                    _stopping ? 'Đang ngừng điểm danh…' : 'Ngừng điểm danh',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
               ),

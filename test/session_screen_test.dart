@@ -15,12 +15,14 @@ class FakeAttendanceApi implements AttendanceApi {
     this.activeAfterFailure = true,
     this.failAfterFirstQr = false,
     this.qrLifetime = const Duration(seconds: 15),
+    this.stopResult,
   });
 
   final bool failFirstStop;
   final bool activeAfterFailure;
   final bool failAfterFirstQr;
   final Duration qrLifetime;
+  final Future<List<String>>? stopResult;
   int issueCount = 0;
   int stopCount = 0;
 
@@ -38,6 +40,7 @@ class FakeAttendanceApi implements AttendanceApi {
   Future<List<String>> stopAttendance(String sessionId) async {
     stopCount++;
     if (failFirstStop && stopCount == 1) throw Exception('network unavailable');
+    if (stopResult != null) return stopResult!;
     return [];
   }
 
@@ -247,6 +250,55 @@ void main() {
     expect(find.textContaining('Không thể ngừng phiên'), findsOneWidget);
     expect(fakeApi.issueCount, greaterThan(1));
     expect(find.text('Ngừng điểm danh'), findsOneWidget);
+  });
+
+  testWidgets('slow stop shows progress then closes with a sync warning', (
+    tester,
+  ) async {
+    final completion = Completer<List<String>>();
+    final fakeApi = FakeAttendanceApi(stopResult: completion.future);
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => FilledButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SessionScreen(
+                    api: fakeApi,
+                    session: session,
+                    liveSessionService: FakeLiveSessionService(
+                      const Stream.empty(),
+                    ),
+                  ),
+                ),
+              ),
+              child: const Text('Open session'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open session'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Ngừng điểm danh'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Xác nhận ngừng'));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Đang ngừng điểm danh…'), findsOneWidget);
+    expect(fakeApi.stopCount, 1);
+    completion.complete(['Google Sheets đang đồng bộ nền.']);
+    await tester.pumpAndSettle();
+    expect(find.byType(SessionScreen), findsNothing);
+    expect(find.textContaining('Đã ngừng phiên.'), findsOneWidget);
+    expect(
+      find.textContaining('Google Sheets đang đồng bộ nền.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('stop response lost after commit still closes the session', (

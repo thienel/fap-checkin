@@ -1796,12 +1796,29 @@ class AttendanceApi {
       );
     });
 
+    // A stopped session already invalidates its QR tokens in Firestore Rules.
+    // Token cleanup must not delay confirmation that attendance has stopped.
+    unawaited(_deleteSessionTokens(uid: uid, sessionId: sessionId));
+    return _finishStoppedSessionSheets(
+      sessionId: sessionId,
+      courseClassId: sheetTarget.courseClassId,
+      subject: sheetTarget.subject,
+      classCode: sheetTarget.classCode,
+    ).timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => [
+        'Google Sheets đang đồng bộ nền. Bạn có thể xem trạng thái hoặc thử lại ở Tổng quan lớp.',
+      ],
+    );
+  });
+
+  Future<List<String>> _finishStoppedSessionSheets({
+    required String sessionId,
+    required String courseClassId,
+    required String subject,
+    required String classCode,
+  }) async {
     final warnings = <String>[];
-    try {
-      await _deleteSessionTokens(uid: uid, sessionId: sessionId);
-    } on Object catch (error) {
-      warnings.add('Không dọn được QR cũ: $error');
-    }
     try {
       final sync = await syncPendingCheckIns(sessionId: sessionId);
       if (sync.notConfigured) {
@@ -1817,16 +1834,16 @@ class AttendanceApi {
     if (_sheets.isConfigured) {
       try {
         await _sheets.sort(
-          subject: sheetTarget.subject,
-          classCode: sheetTarget.classCode,
-          courseClassId: sheetTarget.courseClassId,
+          subject: subject,
+          classCode: classCode,
+          courseClassId: courseClassId,
         );
       } on Object catch (error) {
         warnings.add('Chưa sắp xếp được Google Sheets: $error');
       }
     }
     return warnings;
-  });
+  }
 
   Stream<int> watchAttendanceCount(String sessionId) {
     final uid = _teacherUid();
