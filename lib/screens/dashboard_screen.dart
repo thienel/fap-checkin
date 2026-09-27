@@ -28,6 +28,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  final ScrollController _weekHorizontalController = ScrollController();
   late Future<List<TodaySlot>> _slots;
   late Future<AttendanceSession?> _activeSession;
   bool _showWeek = false;
@@ -53,6 +54,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             .catchError((_) {}),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    _weekHorizontalController.dispose();
+    super.dispose();
   }
 
   void _refresh() {
@@ -86,6 +93,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _showWeek = true;
     _weekStart = startOfWeek(DateTime.now());
     _refresh();
+  }
+
+  int get _selectedPageIndex => _showLeave
+      ? 4
+      : _showRoster
+      ? 3
+      : _showOverview
+      ? 2
+      : _showWeek
+      ? 1
+      : 0;
+
+  void _selectPage(int index) {
+    if (index < 2) {
+      _selectScheduleView(index == 1);
+      return;
+    }
+    setState(() {
+      _showOverview = index == 2;
+      _showRoster = index == 3;
+      _showLeave = index == 4;
+    });
   }
 
   void _changeWeek(int offset) {
@@ -224,12 +253,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ...daySlotDefinitions.map((slot) => slot.number),
       if (includeUnassigned) null,
     ];
-    final columnWidths = <int, TableColumnWidth>{
-      0: const FixedColumnWidth(132),
-      for (var index = 1; index <= 7; index++)
-        index: const FixedColumnWidth(168),
-    };
-
     return Column(
       children: [
         Container(
@@ -254,48 +277,80 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         Expanded(
-          child: SingleChildScrollView(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Table(
-                columnWidths: columnWidths,
-                border: TableBorder.all(color: AppColors.border),
-                defaultVerticalAlignment: TableCellVerticalAlignment.top,
-                children: [
-                  TableRow(
-                    decoration: const BoxDecoration(color: AppColors.primary),
-                    children: [
-                      _weekHeaderCell('Slot trong ngày', null),
-                      for (final date in dates)
-                        _weekHeaderCell(_weekdayLabel(date.weekday), date),
-                    ],
-                  ),
-                  for (final daySlot in rowSlots)
-                    TableRow(
-                      decoration: BoxDecoration(
-                        color: daySlot == null
-                            ? AppColors.warningSurface
-                            : Colors.white,
-                      ),
-                      children: [
-                        _daySlotCell(daySlot, showStandardTime: !hasShortBlock),
-                        for (final date in dates)
-                          _weekScheduleCell(
-                            slots
-                                .where(
-                                  (slot) =>
-                                      slot.daySlot == daySlot &&
-                                      slot.date == _isoDate(date),
-                                )
-                                .toList(),
-                            date,
-                            daySlot,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const slotColumnWidth = 112.0;
+              const minimumDayWidth = 160.0;
+              final minimumTableWidth = slotColumnWidth + 7 * minimumDayWidth;
+              final tableWidth = constraints.maxWidth > minimumTableWidth
+                  ? constraints.maxWidth
+                  : minimumTableWidth;
+              final dayWidth = (tableWidth - slotColumnWidth) / 7;
+              return Scrollbar(
+                controller: _weekHorizontalController,
+                thumbVisibility: tableWidth > constraints.maxWidth,
+                child: SingleChildScrollView(
+                  controller: _weekHorizontalController,
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: tableWidth,
+                    child: SingleChildScrollView(
+                      child: Table(
+                        columnWidths: {
+                          0: const FixedColumnWidth(slotColumnWidth),
+                          for (var index = 1; index <= 7; index++)
+                            index: FixedColumnWidth(dayWidth),
+                        },
+                        border: TableBorder.all(color: AppColors.border),
+                        defaultVerticalAlignment:
+                            TableCellVerticalAlignment.top,
+                        children: [
+                          TableRow(
+                            decoration: const BoxDecoration(
+                              color: AppColors.primary,
+                            ),
+                            children: [
+                              _weekHeaderCell('Slot trong ngày', null),
+                              for (final date in dates)
+                                _weekHeaderCell(
+                                  _weekdayLabel(date.weekday),
+                                  date,
+                                ),
+                            ],
                           ),
-                      ],
+                          for (final daySlot in rowSlots)
+                            TableRow(
+                              decoration: BoxDecoration(
+                                color: daySlot == null
+                                    ? AppColors.warningSurface
+                                    : Colors.white,
+                              ),
+                              children: [
+                                _daySlotCell(
+                                  daySlot,
+                                  showStandardTime: !hasShortBlock,
+                                ),
+                                for (final date in dates)
+                                  _weekScheduleCell(
+                                    slots
+                                        .where(
+                                          (slot) =>
+                                              slot.daySlot == daySlot &&
+                                              slot.date == _isoDate(date),
+                                        )
+                                        .toList(),
+                                    date,
+                                    daySlot,
+                                  ),
+                              ],
+                            ),
+                        ],
+                      ),
                     ),
-                ],
-              ),
-            ),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ],
@@ -674,7 +729,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           return AlertDialog(
             title: title,
             content: SizedBox(
-              width: 620,
+              width: appDialogWidth(context, 620),
               height: 520,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -918,131 +973,133 @@ class _DashboardScreenState extends State<DashboardScreen> {
       body: LayoutBuilder(
         builder: (context, constraints) {
           final compactNavigation = constraints.maxWidth < 1080;
-          return Row(
+          final mobileNavigation = constraints.maxWidth < 700;
+          final content = Row(
             children: [
-              Container(
-                width: compactNavigation ? 76 : 228,
-                decoration: const BoxDecoration(
-                  color: AppColors.surface,
-                  border: Border(right: BorderSide(color: AppColors.border)),
-                ),
-                padding: EdgeInsets.fromLTRB(
-                  compactNavigation ? 10 : 16,
-                  24,
-                  compactNavigation ? 10 : 16,
-                  16,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.qr_code_2,
-                          color: AppColors.primary,
-                          size: 30,
-                        ),
-                        if (!compactNavigation) ...[
-                          const SizedBox(width: 10),
-                          const Expanded(
-                            child: Text(
-                              'FAP Attendance',
-                              style: TextStyle(
-                                color: AppColors.text,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 16,
+              if (!mobileNavigation)
+                Container(
+                  width: compactNavigation ? 76 : 228,
+                  decoration: const BoxDecoration(
+                    color: AppColors.surface,
+                    border: Border(right: BorderSide(color: AppColors.border)),
+                  ),
+                  padding: EdgeInsets.fromLTRB(
+                    compactNavigation ? 10 : 16,
+                    24,
+                    compactNavigation ? 10 : 16,
+                    16,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.qr_code_2,
+                            color: AppColors.primary,
+                            size: 30,
+                          ),
+                          if (!compactNavigation) ...[
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                'FAP Attendance',
+                                style: TextStyle(
+                                  color: AppColors.text,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                ),
                               ),
                             ),
-                          ),
+                          ],
                         ],
+                      ),
+                      const SizedBox(height: AppSpace.xxl),
+                      _SideItem(
+                        icon: Icons.today_outlined,
+                        label: 'Lịch hôm nay',
+                        compact: compactNavigation,
+                        selected:
+                            !_showRoster &&
+                            !_showOverview &&
+                            !_showLeave &&
+                            !_showWeek,
+                        onTap: () => _selectScheduleView(false),
+                      ),
+                      const SizedBox(height: 8),
+                      _SideItem(
+                        icon: Icons.date_range_outlined,
+                        label: 'Lịch trong tuần',
+                        compact: compactNavigation,
+                        selected:
+                            !_showRoster &&
+                            !_showOverview &&
+                            !_showLeave &&
+                            _showWeek,
+                        onTap: () => _selectScheduleView(true),
+                      ),
+                      const SizedBox(height: 8),
+                      _SideItem(
+                        icon: Icons.analytics_outlined,
+                        label: 'Tổng quan lớp',
+                        compact: compactNavigation,
+                        selected: _showOverview,
+                        onTap: () => setState(() {
+                          _showOverview = true;
+                          _showRoster = false;
+                          _showLeave = false;
+                        }),
+                      ),
+                      const SizedBox(height: 8),
+                      _SideItem(
+                        icon: Icons.groups_outlined,
+                        label: 'Danh sách sinh viên',
+                        compact: compactNavigation,
+                        selected: _showRoster,
+                        onTap: () => setState(() {
+                          _showRoster = true;
+                          _showOverview = false;
+                          _showLeave = false;
+                        }),
+                      ),
+                      const SizedBox(height: 8),
+                      _SideItem(
+                        icon: Icons.mark_email_unread_outlined,
+                        label: 'Yêu cầu nghỉ',
+                        compact: compactNavigation,
+                        selected: _showLeave,
+                        onTap: () => setState(() {
+                          _showLeave = true;
+                          _showRoster = false;
+                          _showOverview = false;
+                        }),
+                      ),
+                      const Spacer(),
+                      const Divider(),
+                      if (compactNavigation)
+                        IconButton(
+                          tooltip:
+                              '${widget.user.email ?? 'Giảng viên'} · Đăng xuất',
+                          onPressed: () => FirebaseAuth.instance.signOut(),
+                          icon: const Icon(Icons.logout_outlined),
+                        )
+                      else ...[
+                        Text(
+                          widget.user.email ?? 'Giảng viên',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: AppColors.textMuted),
+                        ),
+                        const SizedBox(height: AppSpace.sm),
+                        OutlinedButton.icon(
+                          onPressed: () => FirebaseAuth.instance.signOut(),
+                          icon: const Icon(Icons.logout_outlined, size: 18),
+                          label: const Text('Đăng xuất'),
+                        ),
                       ],
-                    ),
-                    const SizedBox(height: AppSpace.xxl),
-                    _SideItem(
-                      icon: Icons.today_outlined,
-                      label: 'Lịch hôm nay',
-                      compact: compactNavigation,
-                      selected:
-                          !_showRoster &&
-                          !_showOverview &&
-                          !_showLeave &&
-                          !_showWeek,
-                      onTap: () => _selectScheduleView(false),
-                    ),
-                    const SizedBox(height: 8),
-                    _SideItem(
-                      icon: Icons.date_range_outlined,
-                      label: 'Lịch trong tuần',
-                      compact: compactNavigation,
-                      selected:
-                          !_showRoster &&
-                          !_showOverview &&
-                          !_showLeave &&
-                          _showWeek,
-                      onTap: () => _selectScheduleView(true),
-                    ),
-                    const SizedBox(height: 8),
-                    _SideItem(
-                      icon: Icons.analytics_outlined,
-                      label: 'Tổng quan lớp',
-                      compact: compactNavigation,
-                      selected: _showOverview,
-                      onTap: () => setState(() {
-                        _showOverview = true;
-                        _showRoster = false;
-                        _showLeave = false;
-                      }),
-                    ),
-                    const SizedBox(height: 8),
-                    _SideItem(
-                      icon: Icons.groups_outlined,
-                      label: 'Danh sách sinh viên',
-                      compact: compactNavigation,
-                      selected: _showRoster,
-                      onTap: () => setState(() {
-                        _showRoster = true;
-                        _showOverview = false;
-                        _showLeave = false;
-                      }),
-                    ),
-                    const SizedBox(height: 8),
-                    _SideItem(
-                      icon: Icons.mark_email_unread_outlined,
-                      label: 'Yêu cầu nghỉ',
-                      compact: compactNavigation,
-                      selected: _showLeave,
-                      onTap: () => setState(() {
-                        _showLeave = true;
-                        _showRoster = false;
-                        _showOverview = false;
-                      }),
-                    ),
-                    const Spacer(),
-                    const Divider(),
-                    if (compactNavigation)
-                      IconButton(
-                        tooltip:
-                            '${widget.user.email ?? 'Giảng viên'} · Đăng xuất',
-                        onPressed: () => FirebaseAuth.instance.signOut(),
-                        icon: const Icon(Icons.logout_outlined),
-                      )
-                    else ...[
-                      Text(
-                        widget.user.email ?? 'Giảng viên',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: AppColors.textMuted),
-                      ),
-                      const SizedBox(height: AppSpace.sm),
-                      OutlinedButton.icon(
-                        onPressed: () => FirebaseAuth.instance.signOut(),
-                        icon: const Icon(Icons.logout_outlined, size: 18),
-                        label: const Text('Đăng xuất'),
-                      ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
               Expanded(
                 child: _showLeave
                     ? LeaveRequestsScreen(api: widget.api)
@@ -1054,7 +1111,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     : _showRoster
                     ? RosterImportScreen(api: widget.api)
                     : Padding(
-                        padding: const EdgeInsets.all(AppSpace.xl),
+                        padding: EdgeInsets.all(
+                          mobileNavigation ? AppSpace.md : AppSpace.xl,
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -1204,6 +1263,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ],
           );
+          if (!mobileNavigation) return content;
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('FAP Attendance'),
+              actions: [
+                IconButton(
+                  tooltip: 'Đăng xuất',
+                  onPressed: () => FirebaseAuth.instance.signOut(),
+                  icon: const Icon(Icons.logout_outlined),
+                ),
+              ],
+            ),
+            body: content,
+            bottomNavigationBar: NavigationBar(
+              selectedIndex: _selectedPageIndex,
+              onDestinationSelected: _selectPage,
+              labelBehavior:
+                  NavigationDestinationLabelBehavior.onlyShowSelected,
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.today_outlined),
+                  label: 'Hôm nay',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.date_range_outlined),
+                  label: 'Lịch tuần',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.analytics_outlined),
+                  label: 'Tổng quan',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.groups_outlined),
+                  label: 'Sinh viên',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.mark_email_unread_outlined),
+                  label: 'Đơn nghỉ',
+                ),
+              ],
+            ),
+          );
         },
       ),
     );
@@ -1236,7 +1337,7 @@ class _SessionConfigDialogState extends State<_SessionConfigDialog> {
     return AlertDialog(
       title: const Text('Cấu hình điểm danh'),
       content: SizedBox(
-        width: 430,
+        width: appDialogWidth(context, 430),
         child: Form(
           key: _formKey,
           child: Column(

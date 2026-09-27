@@ -106,7 +106,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
         builder: (context, setDialogState) => AlertDialog(
           title: Text(title),
           content: SizedBox(
-            width: 440,
+            width: appDialogWidth(context, 440),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -268,7 +268,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
             'Đã lưu ${result.savedCount}/${studentIds.length} sinh viên',
           ),
           content: SizedBox(
-            width: 500,
+            width: appDialogWidth(context, 500),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -434,7 +434,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
               student == null ? 'Thêm sinh viên' : 'Sửa thông tin sinh viên',
             ),
             content: SizedBox(
-              width: 440,
+              width: appDialogWidth(context, 440),
               child: Form(
                 key: formKey,
                 child: Column(
@@ -708,87 +708,108 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(AppSpace.xl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          AppPageHeader(
-            title: 'Tổng quan lớp học',
-            subtitle: 'Theo dõi buổi học, chuyên cần và phiên điểm danh.',
-            actions: [
-              SizedBox(
-                width: 310,
-                child: FutureBuilder<List<CourseClassSummary>>(
-                  future: _classes,
-                  builder: (context, snapshot) => DropdownButtonFormField(
-                    initialValue: _selectedClass,
-                    decoration: const InputDecoration(
-                      labelText: 'Môn–lớp',
-                      prefixIcon: Icon(Icons.school_outlined),
-                    ),
-                    items: [
-                      for (final course
-                          in snapshot.data ?? const <CourseClassSummary>[])
-                        DropdownMenuItem(
-                          value: course,
-                          child: Text(course.label),
-                        ),
-                    ],
-                    onChanged: _selectClass,
-                  ),
+    final compactLayout = MediaQuery.sizeOf(context).width < 700;
+    return LayoutBuilder(
+      builder: (context, constraints) => Padding(
+        padding: EdgeInsets.all(compactLayout ? AppSpace.md : AppSpace.xl),
+        child: compactLayout
+            ? SingleChildScrollView(
+                child: SizedBox(
+                  height: _overview == null
+                      ? constraints.maxHeight
+                      : constraints.maxHeight < 1100
+                      ? 1100
+                      : constraints.maxHeight,
+                  child: _buildPageContent(),
                 ),
-              ),
-              const SizedBox(width: 10),
-              if (widget.onOpenSchedule != null) ...[
-                FilledButton.tonalIcon(
-                  onPressed: widget.onOpenSchedule,
-                  icon: const Icon(Icons.drag_indicator),
-                  label: const Text('Điều chỉnh lịch'),
-                ),
-                const SizedBox(width: 8),
-              ],
-              IconButton.filledTonal(
-                tooltip: 'Đồng bộ Google Sheets và làm mới dữ liệu',
-                onPressed: _selectedClass == null ? null : _refreshAndSync,
-                icon: const Icon(Icons.refresh),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpace.xl),
-          Expanded(
-            child: _overview == null
-                ? const AppEmptyState(
-                    icon: Icons.analytics_outlined,
-                    title: 'Chọn một môn–lớp',
-                    description: 'Xem thống kê và chỉnh sửa điểm danh của lớp.',
-                  )
-                : FutureBuilder<CourseOverview>(
-                    future: _overview,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      if (snapshot.hasError) {
-                        return AppEmptyState(
-                          icon: Icons.cloud_off_outlined,
-                          title: 'Không tải được tổng quan',
-                          description: '${snapshot.error}',
-                          action: TextButton.icon(
-                            onPressed: _refresh,
-                            icon: const Icon(Icons.refresh),
-                            label: const Text('Thử lại'),
-                          ),
-                        );
-                      }
-                      return _buildOverview(snapshot.requireData);
-                    },
-                  ),
-          ),
-        ],
+              )
+            : _buildPageContent(),
       ),
     );
   }
+
+  Widget _buildPageContent() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      AppPageHeader(
+        title: 'Tổng quan lớp học',
+        subtitle: 'Theo dõi buổi học, chuyên cần và phiên điểm danh.',
+        actions: [
+          SizedBox(
+            width: MediaQuery.sizeOf(context).width < 700
+                ? MediaQuery.sizeOf(context).width - 2 * AppSpace.md
+                : 310,
+            child: FutureBuilder<List<CourseClassSummary>>(
+              future: _classes,
+              builder: (context, snapshot) => DropdownButtonFormField(
+                initialValue: _selectedClass,
+                decoration: const InputDecoration(
+                  labelText: 'Môn–lớp',
+                  prefixIcon: Icon(Icons.school_outlined),
+                ),
+                items: [
+                  for (final course
+                      in snapshot.data ?? const <CourseClassSummary>[])
+                    DropdownMenuItem(value: course, child: Text(course.label)),
+                ],
+                onChanged: _selectClass,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          if (widget.onOpenSchedule != null) ...[
+            FilledButton.tonalIcon(
+              onPressed: widget.onOpenSchedule,
+              icon: const Icon(Icons.drag_indicator),
+              label: const Text('Điều chỉnh lịch'),
+            ),
+            const SizedBox(width: 8),
+          ],
+          IconButton.filledTonal(
+            tooltip: 'Đồng bộ Google Sheets và làm mới dữ liệu',
+            onPressed: _selectedClass == null ? null : _refreshAndSync,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      const SizedBox(height: AppSpace.xl),
+      Expanded(
+        child: _overview == null
+            ? const AppEmptyState(
+                icon: Icons.analytics_outlined,
+                title: 'Chọn một môn–lớp',
+                description: 'Xem thống kê và chỉnh sửa điểm danh của lớp.',
+              )
+            : FutureBuilder<CourseOverview>(
+                future: _overview,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Align(
+                      alignment: Alignment.topCenter,
+                      child: Padding(
+                        padding: EdgeInsets.all(AppSpace.xl),
+                        child: CircularProgressIndicator(),
+                      ),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return AppEmptyState(
+                      icon: Icons.cloud_off_outlined,
+                      title: 'Không tải được tổng quan',
+                      description: '${snapshot.error}',
+                      action: TextButton.icon(
+                        onPressed: _refresh,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Thử lại'),
+                      ),
+                    );
+                  }
+                  return _buildOverview(snapshot.requireData);
+                },
+              ),
+      ),
+    ],
+  );
 
   Widget _buildOverview(CourseOverview overview) {
     final students = _filteredStudents(overview);
@@ -1163,7 +1184,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
       builder: (context) => AlertDialog(
         title: Text(student.displayName),
         content: SizedBox(
-          width: 620,
+          width: appDialogWidth(context, 620),
           child: ListView(
             shrinkWrap: true,
             children: [
@@ -1213,7 +1234,7 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
       builder: (dialogContext) => AlertDialog(
         title: Text('Buổi ${slot.number} · ${slot.date}'),
         content: SizedBox(
-          width: 680,
+          width: appDialogWidth(context, 680),
           height: 520,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

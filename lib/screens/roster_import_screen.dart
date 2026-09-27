@@ -126,7 +126,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       builder: (dialogContext) => AlertDialog(
         title: Text('Kiểm tra dòng ${row.rowNumber}'),
         content: SizedBox(
-          width: 440,
+          width: appDialogWidth(context, 440),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -203,7 +203,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
           ],
         ),
         content: SizedBox(
-          width: 480,
+          width: appDialogWidth(context, 480),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -546,204 +546,217 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
   @override
   Widget build(BuildContext context) {
     final validCount = _rows.where((row) => row.isValid).length;
+    final compactLayout = MediaQuery.sizeOf(context).width < 700;
     return Padding(
-      padding: const EdgeInsets.all(AppSpace.xl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      padding: EdgeInsets.all(
+        MediaQuery.sizeOf(context).width < 700 ? AppSpace.md : AppSpace.xl,
+      ),
+      child: compactLayout
+          ? SingleChildScrollView(child: _buildPageContent(validCount, true))
+          : _buildPageContent(validCount, false),
+    );
+  }
+
+  Widget _buildPageContent(int validCount, bool compactLayout) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const AppPageHeader(title: 'Danh sách sinh viên'),
+      const SizedBox(height: AppSpace.xl),
+      Wrap(
+        spacing: 16,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          const AppPageHeader(title: 'Danh sách sinh viên'),
-          const SizedBox(height: AppSpace.xl),
-          Wrap(
-            spacing: 16,
-            runSpacing: 12,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              SizedBox(
-                width: 300,
-                child: FutureBuilder<List<CourseClassSummary>>(
-                  future: _classes,
-                  builder: (context, snapshot) {
-                    return DropdownButtonFormField<CourseClassSummary>(
-                      initialValue: _selectedClass,
-                      decoration: const InputDecoration(labelText: 'Môn–lớp'),
-                      items: [
-                        for (final course
-                            in snapshot.data ?? const <CourseClassSummary>[])
-                          DropdownMenuItem(
-                            value: course,
-                            child: Text(course.label),
-                          ),
-                      ],
-                      onChanged: (_importing || _scanningOcr)
-                          ? null
-                          : (value) => setState(() => _selectedClass = value),
-                    );
-                  },
-                ),
-              ),
-              FilledButton.tonalIcon(
-                onPressed: (_importing || _scanningOcr) ? null : _pickFile,
-                icon: const Icon(Icons.upload_file),
-                label: Text(
-                  _fileName != null && !_isOcrSource
-                      ? _fileName!
-                      : 'Chọn CSV/XLSX',
-                ),
-              ),
-              FilledButton.icon(
-                onPressed: (_importing || _scanningOcr)
-                    ? null
-                    : _pickImageForOcr,
-                icon: _scanningOcr
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.document_scanner_rounded),
-                label: Text(_scanningOcr ? 'Đang đọc ảnh…' : 'Quét ảnh'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-              if (_fileName != null)
-                InputChip(
-                  avatar: Icon(
-                    _isOcrSource
-                        ? Icons.image_rounded
-                        : Icons.description_rounded,
-                    size: 16,
-                    color: AppColors.primary,
-                  ),
-                  label: Text(_fileName!, style: const TextStyle(fontSize: 12)),
-                  onDeleted: (_importing || _scanningOcr) ? null : _clearRoster,
-                  deleteIconColor: AppColors.textMuted,
-                  tooltip: 'Xóa danh sách hiện tại',
-                ),
-            ],
-          ),
-          if (_file != null) ...[
-            if (_isOcrSource && validCount != _rows.length) ...[
-              const SizedBox(height: AppSpace.md),
-              AppNotice(
-                message:
-                    '${_rows.length - validCount} dòng cần sửa trước khi nhập.',
-                tone: AppTone.warning,
-              ),
-            ],
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 14,
-              runSpacing: 12,
-              children: [
-                if (!_isOcrSource) ...[
-                  _mappingDropdown(RosterField.email, 'Email'),
-                  _mappingDropdown(RosterField.studentCode, 'Mã sinh viên'),
-                  _mappingDropdown(RosterField.fullName, 'Họ tên'),
-                ],
-                SizedBox(
-                  width: 230,
-                  child: DropdownButtonFormField<RosterImportMode>(
-                    initialValue: _mode,
-                    decoration: const InputDecoration(labelText: 'Cách nhập'),
-                    items: const [
+          SizedBox(
+            width: MediaQuery.sizeOf(context).width < 700
+                ? MediaQuery.sizeOf(context).width - 2 * AppSpace.md
+                : 300,
+            child: FutureBuilder<List<CourseClassSummary>>(
+              future: _classes,
+              builder: (context, snapshot) {
+                return DropdownButtonFormField<CourseClassSummary>(
+                  initialValue: _selectedClass,
+                  decoration: const InputDecoration(labelText: 'Môn–lớp'),
+                  items: [
+                    for (final course
+                        in snapshot.data ?? const <CourseClassSummary>[])
                       DropdownMenuItem(
-                        value: RosterImportMode.merge,
-                        child: Text('Gộp vào lớp'),
+                        value: course,
+                        child: Text(course.label),
                       ),
-                      DropdownMenuItem(
-                        value: RosterImportMode.replaceInactive,
-                        child: Text('Thay danh sách lớp'),
-                      ),
-                    ],
-                    onChanged: _importing
-                        ? null
-                        : (value) => setState(() => _mode = value!),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: AppSpace.lg,
-              runSpacing: AppSpace.md,
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Wrap(
-                  spacing: AppSpace.sm,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    _CountChip(
-                      label: 'Tổng',
-                      value: _rows.length,
-                      tone: AppTone.info,
-                    ),
-                    _CountChip(
-                      label: 'Hợp lệ',
-                      value: validCount,
-                      tone: AppTone.success,
-                    ),
-                    _CountChip(
-                      label: 'Lỗi',
-                      value: _rows.length - validCount,
-                      tone: AppTone.error,
-                    ),
-                    const SizedBox(width: AppSpace.xs),
-                    OutlinedButton.icon(
-                      onPressed: (_importing || _scanningOcr)
-                          ? null
-                          : _clearRoster,
-                      icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                      label: const Text('Xóa bảng'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.textMuted,
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ),
                   ],
-                ),
-                FilledButton.icon(
-                  onPressed:
-                      _importing ||
-                          _selectedClass == null ||
-                          validCount != _rows.length
+                  onChanged: (_importing || _scanningOcr)
                       ? null
-                      : _import,
-                  icon: const Icon(Icons.cloud_upload_outlined),
-                  label: const Text('Nhập danh sách'),
-                ),
-              ],
+                      : (value) => setState(() => _selectedClass = value),
+                );
+              },
             ),
-            if (!_isOcrSource && validCount != _rows.length) ...[
-              const SizedBox(height: 8),
-              Text(
-                'Hãy sửa toàn bộ ${_rows.length - validCount} dòng lỗi trước khi import.',
-                style: const TextStyle(color: AppColors.error),
+          ),
+          FilledButton.tonalIcon(
+            onPressed: (_importing || _scanningOcr) ? null : _pickFile,
+            icon: const Icon(Icons.upload_file),
+            label: Text(
+              _fileName != null && !_isOcrSource ? _fileName! : 'Chọn CSV/XLSX',
+            ),
+          ),
+          FilledButton.icon(
+            onPressed: (_importing || _scanningOcr) ? null : _pickImageForOcr,
+            icon: _scanningOcr
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.document_scanner_rounded),
+            label: Text(_scanningOcr ? 'Đang đọc ảnh…' : 'Quét ảnh'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+            ),
+          ),
+          if (_fileName != null)
+            InputChip(
+              avatar: Icon(
+                _isOcrSource ? Icons.image_rounded : Icons.description_rounded,
+                size: 16,
+                color: AppColors.primary,
               ),
-            ],
-            if (_importing) ...[
-              const SizedBox(height: 10),
-              LinearProgressIndicator(value: _progress),
-            ],
-            const SizedBox(height: 14),
-            Expanded(child: _previewTable()),
-          ] else
-            const Expanded(
-              child: AppEmptyState(
-                icon: Icons.upload_file_outlined,
-                title: 'Chưa chọn tệp danh sách',
-                description: 'Tệp cần có email, mã sinh viên và họ tên.',
-              ),
+              label: Text(_fileName!, style: const TextStyle(fontSize: 12)),
+              onDeleted: (_importing || _scanningOcr) ? null : _clearRoster,
+              deleteIconColor: AppColors.textMuted,
+              tooltip: 'Xóa danh sách hiện tại',
             ),
         ],
       ),
-    );
-  }
+      if (_file != null) ...[
+        if (_isOcrSource && validCount != _rows.length) ...[
+          const SizedBox(height: AppSpace.md),
+          AppNotice(
+            message:
+                '${_rows.length - validCount} dòng cần sửa trước khi nhập.',
+            tone: AppTone.warning,
+          ),
+        ],
+        const SizedBox(height: 20),
+        Wrap(
+          spacing: 14,
+          runSpacing: 12,
+          children: [
+            if (!_isOcrSource) ...[
+              _mappingDropdown(RosterField.email, 'Email'),
+              _mappingDropdown(RosterField.studentCode, 'Mã sinh viên'),
+              _mappingDropdown(RosterField.fullName, 'Họ tên'),
+            ],
+            SizedBox(
+              width: 230,
+              child: DropdownButtonFormField<RosterImportMode>(
+                initialValue: _mode,
+                decoration: const InputDecoration(labelText: 'Cách nhập'),
+                items: const [
+                  DropdownMenuItem(
+                    value: RosterImportMode.merge,
+                    child: Text('Gộp vào lớp'),
+                  ),
+                  DropdownMenuItem(
+                    value: RosterImportMode.replaceInactive,
+                    child: Text('Thay danh sách lớp'),
+                  ),
+                ],
+                onChanged: _importing
+                    ? null
+                    : (value) => setState(() => _mode = value!),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Wrap(
+          spacing: AppSpace.lg,
+          runSpacing: AppSpace.md,
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Wrap(
+              spacing: AppSpace.sm,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _CountChip(
+                  label: 'Tổng',
+                  value: _rows.length,
+                  tone: AppTone.info,
+                ),
+                _CountChip(
+                  label: 'Hợp lệ',
+                  value: validCount,
+                  tone: AppTone.success,
+                ),
+                _CountChip(
+                  label: 'Lỗi',
+                  value: _rows.length - validCount,
+                  tone: AppTone.error,
+                ),
+                const SizedBox(width: AppSpace.xs),
+                OutlinedButton.icon(
+                  onPressed: (_importing || _scanningOcr) ? null : _clearRoster,
+                  icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                  label: const Text('Xóa bảng'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textMuted,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+            ),
+            FilledButton.icon(
+              onPressed:
+                  _importing ||
+                      _selectedClass == null ||
+                      validCount != _rows.length
+                  ? null
+                  : _import,
+              icon: const Icon(Icons.cloud_upload_outlined),
+              label: const Text('Nhập danh sách'),
+            ),
+          ],
+        ),
+        if (!_isOcrSource && validCount != _rows.length) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Hãy sửa toàn bộ ${_rows.length - validCount} dòng lỗi trước khi import.',
+            style: const TextStyle(color: AppColors.error),
+          ),
+        ],
+        if (_importing) ...[
+          const SizedBox(height: 10),
+          LinearProgressIndicator(value: _progress),
+        ],
+        const SizedBox(height: 14),
+        if (compactLayout)
+          SizedBox(height: 460, child: _previewTable())
+        else
+          Expanded(child: _previewTable()),
+      ] else
+        compactLayout
+            ? const SizedBox(
+                height: 280,
+                child: AppEmptyState(
+                  icon: Icons.upload_file_outlined,
+                  title: 'Chưa chọn tệp danh sách',
+                  description: 'Tệp cần có email, mã sinh viên và họ tên.',
+                ),
+              )
+            : const Expanded(
+                child: AppEmptyState(
+                  icon: Icons.upload_file_outlined,
+                  title: 'Chưa chọn tệp danh sách',
+                  description: 'Tệp cần có email, mã sinh viên và họ tên.',
+                ),
+              ),
+    ],
+  );
 
   Widget _mappingDropdown(RosterField field, String label) {
     return SizedBox(

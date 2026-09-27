@@ -306,7 +306,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
     return AlertDialog(
       title: const Text('Thêm lớp môn'),
       content: SizedBox(
-        width: 620,
+        width: appDialogWidth(context, 620),
         child: SingleChildScrollView(
           child: Form(
             key: _formKey,
@@ -314,13 +314,14 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Wrap(
+                  spacing: AppSpace.sm,
+                  runSpacing: AppSpace.sm,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Expanded(
-                      child: Text(
-                        'Thông tin lớp',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
+                    Text(
+                      'Thông tin lớp',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
                     OutlinedButton.icon(
                       onPressed: _scanning || _submitting
@@ -405,28 +406,40 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                   ),
                 ],
                 const SizedBox(height: AppSpace.lg),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _subjectController,
-                        textCapitalization: TextCapitalization.characters,
-                        decoration: const InputDecoration(
-                          labelText: 'Mã môn học',
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final fieldWidth = constraints.maxWidth < 480
+                        ? constraints.maxWidth
+                        : (constraints.maxWidth - 12) / 2;
+                    return Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        SizedBox(
+                          width: fieldWidth,
+                          child: TextFormField(
+                            controller: _subjectController,
+                            textCapitalization: TextCapitalization.characters,
+                            decoration: const InputDecoration(
+                              labelText: 'Mã môn học',
+                            ),
+                            validator: _validateCode,
+                          ),
                         ),
-                        validator: _validateCode,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _classController,
-                        textCapitalization: TextCapitalization.characters,
-                        decoration: const InputDecoration(labelText: 'Mã lớp'),
-                        validator: _validateCode,
-                      ),
-                    ),
-                  ],
+                        SizedBox(
+                          width: fieldWidth,
+                          child: TextFormField(
+                            controller: _classController,
+                            textCapitalization: TextCapitalization.characters,
+                            decoration: const InputDecoration(
+                              labelText: 'Mã lớp',
+                            ),
+                            validator: _validateCode,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: AppSpace.md),
                 TextFormField(
@@ -441,82 +454,100 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: AppSpace.md),
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: _submitting || _scanning ? null : _pickDate,
-                        borderRadius: BorderRadius.circular(AppRadii.control),
-                        child: InputDecorator(
-                          decoration: InputDecoration(
-                            labelText: 'Ngày buổi 1',
-                            suffixIcon: const Icon(
-                              Icons.calendar_month_outlined,
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final fieldWidth = constraints.maxWidth < 480
+                        ? constraints.maxWidth
+                        : (constraints.maxWidth - 12) / 2;
+                    return Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        SizedBox(
+                          width: fieldWidth,
+                          child: InkWell(
+                            onTap: _submitting || _scanning ? null : _pickDate,
+                            borderRadius: BorderRadius.circular(
+                              AppRadii.control,
                             ),
-                            errorText: _attemptedSubmit && _startDate == null
-                                ? 'Chọn ngày buổi 1'
-                                : null,
-                          ),
-                          child: Text(
-                            _startDate == null
-                                ? 'Chọn ngày'
-                                : DateFormat('dd/MM/yyyy').format(_startDate!),
-                            style: _startDate == null
-                                ? const TextStyle(color: AppColors.textMuted)
-                                : null,
+                            child: InputDecorator(
+                              decoration: InputDecoration(
+                                labelText: 'Ngày buổi 1',
+                                suffixIcon: const Icon(
+                                  Icons.calendar_month_outlined,
+                                ),
+                                errorText:
+                                    _attemptedSubmit && _startDate == null
+                                    ? 'Chọn ngày buổi 1'
+                                    : null,
+                              ),
+                              child: Text(
+                                _startDate == null
+                                    ? 'Chọn ngày'
+                                    : DateFormat('dd/MM/yyyy')
+                                          .format(_startDate!),
+                                style: _startDate == null
+                                    ? const TextStyle(
+                                        color: AppColors.textMuted,
+                                      )
+                                    : null,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<SchedulePreset>(
-                        key: ValueKey('preset-$_selectionVersion'),
-                        initialValue: _preset,
-                        decoration: InputDecoration(
-                          labelText: 'Số buổi · nhịp học',
-                          hintText: 'Chọn lịch học',
-                          errorText: _attemptedSubmit && _preset == null
-                              ? 'Chọn lịch học'
-                              : null,
+                        SizedBox(
+                          width: fieldWidth,
+                          child: DropdownButtonFormField<SchedulePreset>(
+                            key: ValueKey('preset-$_selectionVersion'),
+                            initialValue: _preset,
+                            isExpanded: true,
+                            decoration: InputDecoration(
+                              labelText: 'Số buổi · nhịp học',
+                              hintText: 'Chọn lịch học',
+                              errorText: _attemptedSubmit && _preset == null
+                                  ? 'Chọn lịch học'
+                                  : null,
+                            ),
+                            items:
+                                const [
+                                      SchedulePreset.twentySlotsTenWeeks,
+                                      SchedulePreset.thirtySlotsThreeWeeks,
+                                      SchedulePreset.tenSlotsTenWeeks,
+                                    ]
+                                    .map(
+                                      (preset) => DropdownMenuItem(
+                                        value: preset,
+                                        child: Text(preset.label),
+                                      ),
+                                    )
+                                    .toList(),
+                            onChanged: (value) => setState(() {
+                              _preset = value;
+                              if (!_dateManuallyEdited &&
+                                  _selectedOcrIndex != null) {
+                                _startDate = _suggestedStartDate(
+                                  _ocrItems[_selectedOcrIndex!],
+                                  value,
+                                );
+                              } else if (value ==
+                                      SchedulePreset.thirtySlotsThreeWeeks &&
+                                  _startDate?.weekday == DateTime.saturday) {
+                                _startDate = null;
+                              }
+                              if (value ==
+                                      SchedulePreset.thirtySlotsThreeWeeks &&
+                                  _daySlot != null &&
+                                  _daySlot! > 6) {
+                                _daySlot = null;
+                              }
+                              _selectionVersion++;
+                              _error = null;
+                            }),
+                          ),
                         ),
-                        items:
-                            const [
-                                  SchedulePreset.twentySlotsTenWeeks,
-                                  SchedulePreset.thirtySlotsThreeWeeks,
-                                  SchedulePreset.tenSlotsTenWeeks,
-                                ]
-                                .map(
-                                  (preset) => DropdownMenuItem(
-                                    value: preset,
-                                    child: Text(preset.label),
-                                  ),
-                                )
-                                .toList(),
-                        onChanged: (value) => setState(() {
-                          _preset = value;
-                          if (!_dateManuallyEdited &&
-                              _selectedOcrIndex != null) {
-                            _startDate = _suggestedStartDate(
-                              _ocrItems[_selectedOcrIndex!],
-                              value,
-                            );
-                          } else if (value ==
-                                  SchedulePreset.thirtySlotsThreeWeeks &&
-                              _startDate?.weekday == DateTime.saturday) {
-                            _startDate = null;
-                          }
-                          if (value == SchedulePreset.thirtySlotsThreeWeeks &&
-                              _daySlot != null &&
-                              _daySlot! > 6) {
-                            _daySlot = null;
-                          }
-                          _selectionVersion++;
-                          _error = null;
-                        }),
-                      ),
-                    ),
-                  ],
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: AppSpace.md),
                 DropdownButtonFormField<int>(

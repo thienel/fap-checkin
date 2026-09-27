@@ -5,6 +5,9 @@ import '../theme/app_theme.dart';
 
 enum AppTone { info, success, warning, error }
 
+double appDialogWidth(BuildContext context, double preferred) =>
+    (MediaQuery.sizeOf(context).width - 128).clamp(0, preferred).toDouble();
+
 extension AppToneColors on AppTone {
   Color get foreground => switch (this) {
     AppTone.info => AppColors.info,
@@ -103,15 +106,40 @@ class AppNotice extends StatelessWidget {
       borderRadius: BorderRadius.circular(AppRadii.control),
       border: Border.all(color: tone.foreground.withValues(alpha: 0.25)),
     ),
-    child: Row(
-      children: [
-        Icon(icon ?? Icons.info_outline, size: 20, color: tone.foreground),
-        const SizedBox(width: AppSpace.md),
-        Expanded(
-          child: Text(message, style: TextStyle(color: tone.foreground)),
-        ),
-        if (action != null) ...[const SizedBox(width: AppSpace.md), action!],
-      ],
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final messageRow = Row(
+          children: [
+            Icon(icon ?? Icons.info_outline, size: 20, color: tone.foreground),
+            const SizedBox(width: AppSpace.md),
+            Expanded(
+              child: Text(message, style: TextStyle(color: tone.foreground)),
+            ),
+          ],
+        );
+        if (action == null) return messageRow;
+        if (constraints.maxWidth < 520) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              messageRow,
+              const SizedBox(height: AppSpace.sm),
+              action!,
+            ],
+          );
+        }
+        return Row(
+          children: [
+            Icon(icon ?? Icons.info_outline, size: 20, color: tone.foreground),
+            const SizedBox(width: AppSpace.md),
+            Expanded(
+              child: Text(message, style: TextStyle(color: tone.foreground)),
+            ),
+            const SizedBox(width: AppSpace.md),
+            action!,
+          ],
+        );
+      },
     ),
   );
 }

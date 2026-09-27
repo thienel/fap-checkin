@@ -365,7 +365,7 @@ class _SessionScreenState extends State<SessionScreen> {
           ],
         ),
         content: SizedBox(
-          width: 500,
+          width: appDialogWidth(context, 500),
           child: FutureBuilder<StudentAttendanceDetail>(
             future: widget.api.getStudentAttendanceDetail(
               courseClassId: widget.session.courseClassId,
@@ -530,7 +530,7 @@ class _SessionScreenState extends State<SessionScreen> {
         builder: (context, setDialogState) => AlertDialog(
           title: const Text('Cập nhật trạng thái điểm danh'),
           content: SizedBox(
-            width: 440,
+            width: appDialogWidth(context, 440),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -674,29 +674,41 @@ class _SessionScreenState extends State<SessionScreen> {
             ],
           ),
           actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 16, top: 12, bottom: 12),
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.error,
-                  foregroundColor: Colors.white,
-                ),
+            if (MediaQuery.sizeOf(context).width < 600)
+              IconButton(
+                tooltip: 'Ngừng điểm danh',
                 onPressed: _stopping ? null : _stop,
                 icon: _stopping
                     ? const SizedBox.square(
                         dimension: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.stop_circle_outlined, size: 20),
-                label: const Text(
-                  'Ngừng điểm danh',
-                  style: TextStyle(fontWeight: FontWeight.w700),
+                    : const Icon(Icons.stop_circle_outlined),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(right: 16, top: 12, bottom: 12),
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.error,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _stopping ? null : _stop,
+                  icon: _stopping
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.stop_circle_outlined, size: 20),
+                  label: const Text(
+                    'Ngừng điểm danh',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
-            ),
           ],
         ),
         body: StreamBuilder<LiveAttendanceState>(
