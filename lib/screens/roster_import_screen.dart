@@ -36,8 +36,8 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
 
   late final GeminiOcrService _ocr;
   bool _scanningOcr = false;
-  String _activeApiKey = '';
-  late String _activeModel;
+  late final String _activeApiKey;
+  late final String _activeModel;
 
   bool get _isOcrSource =>
       _fileName != null &&
@@ -199,7 +199,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
           children: [
             Icon(Icons.add_photo_alternate_rounded, color: AppColors.primary),
             SizedBox(width: AppSpace.sm),
-            Text('Tùy chọn quét thêm ảnh'),
+            Text('Quét thêm ảnh'),
           ],
         ),
         content: SizedBox(
@@ -208,10 +208,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Bảng hiện có ${_rows.length} sinh viên. Thầy/Cô muốn xử lý ảnh mới này như thế nào?',
-                style: const TextStyle(fontSize: 14, height: 1.4),
-              ),
+              Text('${_rows.length} sinh viên trong bảng hiện tại.'),
               const SizedBox(height: AppSpace.lg),
               InkWell(
                 onTap: () => Navigator.pop(dialogContext, OcrScanAction.append),
@@ -246,7 +243,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Gộp thêm vào danh sách hiện tại',
+                              'Gộp vào bảng hiện tại',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.primary,
@@ -255,7 +252,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                             ),
                             const SizedBox(height: 3),
                             Text(
-                              'Giữ ${_rows.length} sinh viên hiện tại và thêm sinh viên từ ảnh mới. Tự động bỏ qua các bạn bị trùng MSSV/Email.',
+                              'Thêm sinh viên mới, bỏ qua mã hoặc email trùng.',
                               style: const TextStyle(
                                 fontSize: 12,
                                 color: AppColors.textMuted,
@@ -303,7 +300,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Quét mới lại từ đầu',
+                              'Thay bảng hiện tại',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.text,
@@ -312,7 +309,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                             ),
                             SizedBox(height: 3),
                             Text(
-                              'Xóa toàn bộ danh sách hiện tại và chỉ lấy dữ liệu từ ảnh mới này.',
+                              'Chỉ giữ sinh viên từ ảnh mới.',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: AppColors.textMuted,
@@ -344,8 +341,12 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
 
   Future<void> _pickImageForOcr() async {
     if (_activeApiKey.trim().isEmpty) {
-      final keyProvided = await _showApiKeyDialog();
-      if (!keyProvided) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Chưa có cấu hình quét ảnh. Liên hệ quản trị viên.'),
+        ),
+      );
+      return;
     }
 
     OcrScanAction scanAction = OcrScanAction.replace;
@@ -422,19 +423,10 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
         final addedCount = ocrFile.rows.length - existingData.length;
         final duplicateCount = scannedItems.length - addedCount;
         final message = duplicateCount > 0
-            ? 'Đã gộp thêm $addedCount sinh viên mới (bỏ qua $duplicateCount bạn bị trùng). Tổng: ${ocrFile.rows.length} sinh viên.'
-            : 'Đã gộp thêm $addedCount sinh viên mới. Tổng: ${ocrFile.rows.length} sinh viên.';
+            ? 'Đã thêm $addedCount sinh viên, bỏ qua $duplicateCount dòng trùng.'
+            : 'Đã thêm $addedCount sinh viên.';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(backgroundColor: AppColors.success, content: Text(message)),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: AppColors.success,
-            content: Text(
-              'Quét thành công ${scannedItems.length} sinh viên từ ảnh!',
-            ),
-          ),
         );
       }
     } catch (error) {
@@ -444,134 +436,11 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
           backgroundColor: AppColors.error,
           content: Text('$error'),
           duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'Cài đặt AI',
-            textColor: Colors.white,
-            onPressed: () => _showApiKeyDialog(),
-          ),
         ),
       );
     } finally {
       if (mounted) setState(() => _scanningOcr = false);
     }
-  }
-
-  Future<bool> _showApiKeyDialog() async {
-    final keyController = TextEditingController(text: _activeApiKey);
-    String tempModel = _activeModel;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadii.panel),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.auto_awesome, color: AppColors.primary),
-              SizedBox(width: AppSpace.sm),
-              Text('Cấu hình AI OCR (Gemini)'),
-            ],
-          ),
-          content: SizedBox(
-            width: 440,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Nhập Gemini API key một lần. Ứng dụng sẽ lưu key trong file gemini.local.json trên máy này.',
-                  style: TextStyle(color: AppColors.textMuted, fontSize: 13),
-                ),
-                const SizedBox(height: AppSpace.md),
-                TextField(
-                  controller: keyController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Gemini API Key',
-                    hintText: 'AIzaSy...',
-                    prefixIcon: Icon(Icons.key_rounded),
-                  ),
-                ),
-                const SizedBox(height: AppSpace.md),
-                DropdownButtonFormField<String>(
-                  initialValue: tempModel,
-                  decoration: const InputDecoration(
-                    labelText: 'AI Model',
-                    prefixIcon: Icon(Icons.memory_rounded),
-                  ),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'gemini-3.5-flash-lite',
-                      child: Text('Gemini 3.5 Flash Lite'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'gemini-3.1-flash-lite',
-                      child: Text('Gemini 3.1 Flash Lite'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'gemini-3.8-flash',
-                      child: Text('Gemini 3.8 Flash'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'gemini-2.5-flash',
-                      child: Text('Gemini 2.5 Flash'),
-                    ),
-                  ],
-                  onChanged: (val) {
-                    if (val != null) {
-                      setDialogState(() => tempModel = val);
-                    }
-                  },
-                ),
-                const SizedBox(height: AppSpace.sm),
-                const Text(
-                  ' Mẹo: Tạo API key miễn phí tại aistudio.google.com',
-                  style: TextStyle(fontSize: 12, color: AppColors.info),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Hủy'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (keyController.text.trim().isNotEmpty) {
-                  Navigator.pop(dialogContext, true);
-                }
-              },
-              child: const Text('Lưu cấu hình'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    final enteredKey = keyController.text.trim();
-    keyController.dispose();
-    if (confirmed == true && enteredKey.isNotEmpty) {
-      try {
-        await GeminiOcrSettings.saveLocalConfig(enteredKey, tempModel);
-      } catch (error) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Không lưu được Gemini API key: $error')),
-          );
-        }
-        return false;
-      }
-      if (!mounted) return false;
-      setState(() {
-        _activeApiKey = enteredKey;
-        _activeModel = tempModel;
-      });
-      return true;
-    }
-    return false;
   }
 
   Future<void> _import() async {
@@ -682,10 +551,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const AppPageHeader(
-            title: 'Danh sách sinh viên',
-            subtitle: 'Chọn tệp CSV/XLSX hoặc Quét ảnh màn hình FAP bằng AI, kiểm tra dữ liệu rồi nhập vào lớp.',
-          ),
+          const AppPageHeader(title: 'Danh sách sinh viên'),
           const SizedBox(height: AppSpace.xl),
           Wrap(
             spacing: 16,
@@ -721,7 +587,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                 label: Text(
                   _fileName != null && !_isOcrSource
                       ? _fileName!
-                      : 'Chọn file CSV/XLSX',
+                      : 'Chọn CSV/XLSX',
                 ),
               ),
               FilledButton.icon(
@@ -738,20 +604,11 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                         ),
                       )
                     : const Icon(Icons.document_scanner_rounded),
-                label: Text(
-                  _scanningOcr ? 'Đang đọc ảnh AI...' : 'Quét ảnh AI (OCR)',
-                ),
+                label: Text(_scanningOcr ? 'Đang đọc ảnh…' : 'Quét ảnh'),
                 style: FilledButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
                 ),
-              ),
-              IconButton.outlined(
-                tooltip: 'Cài đặt Gemini API & Model',
-                onPressed: (_importing || _scanningOcr)
-                    ? null
-                    : _showApiKeyDialog,
-                icon: const Icon(Icons.auto_awesome, color: AppColors.primary),
               ),
               if (_fileName != null)
                 InputChip(
@@ -770,10 +627,11 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
             ],
           ),
           if (_file != null) ...[
-            if (_isOcrSource) ...[
+            if (_isOcrSource && validCount != _rows.length) ...[
               const SizedBox(height: AppSpace.md),
-              const AppNotice(
-                message: 'Chạm vào một dòng trong bảng để sửa kết quả OCR. Email không có trong ảnh sẽ để trống và cần nhập trước khi import.',
+              AppNotice(
+                message:
+                    '${_rows.length - validCount} dòng cần sửa trước khi nhập.',
                 tone: AppTone.warning,
               ),
             ],
@@ -782,24 +640,24 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
               spacing: 14,
               runSpacing: 12,
               children: [
-                _mappingDropdown(RosterField.email, 'Email'),
-                _mappingDropdown(RosterField.studentCode, 'Mã sinh viên'),
-                _mappingDropdown(RosterField.fullName, 'Họ tên'),
+                if (!_isOcrSource) ...[
+                  _mappingDropdown(RosterField.email, 'Email'),
+                  _mappingDropdown(RosterField.studentCode, 'Mã sinh viên'),
+                  _mappingDropdown(RosterField.fullName, 'Họ tên'),
+                ],
                 SizedBox(
                   width: 230,
                   child: DropdownButtonFormField<RosterImportMode>(
                     initialValue: _mode,
-                    decoration: const InputDecoration(
-                      labelText: 'Chế độ import',
-                    ),
+                    decoration: const InputDecoration(labelText: 'Cách nhập'),
                     items: const [
                       DropdownMenuItem(
                         value: RosterImportMode.merge,
-                        child: Text('Merge'),
+                        child: Text('Gộp vào lớp'),
                       ),
                       DropdownMenuItem(
                         value: RosterImportMode.replaceInactive,
-                        child: Text('Replace inactive'),
+                        child: Text('Thay danh sách lớp'),
                       ),
                     ],
                     onChanged: _importing
@@ -857,11 +715,11 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                       ? null
                       : _import,
                   icon: const Icon(Icons.cloud_upload_outlined),
-                  label: const Text('Import roster'),
+                  label: const Text('Nhập danh sách'),
                 ),
               ],
             ),
-            if (validCount != _rows.length) ...[
+            if (!_isOcrSource && validCount != _rows.length) ...[
               const SizedBox(height: 8),
               Text(
                 'Hãy sửa toàn bộ ${_rows.length - validCount} dòng lỗi trước khi import.',
@@ -953,7 +811,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                       label: Padding(
                         padding: EdgeInsets.only(right: 28),
                         child: Text(
-                          'Kết quả',
+                          'Trạng thái',
                           style: TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),
@@ -1003,6 +861,17 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                 ),
                 const SizedBox(width: AppSpace.sm),
                 Text(row.isValid ? 'Hợp lệ' : row.errors.join('; ')),
+                if (_isOcrSource) ...[
+                  const SizedBox(width: AppSpace.sm),
+                  const Tooltip(
+                    message: 'Sửa dòng',
+                    child: Icon(
+                      Icons.edit_outlined,
+                      size: 16,
+                      color: AppColors.textMuted,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
