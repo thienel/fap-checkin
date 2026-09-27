@@ -2452,6 +2452,8 @@ class AttendanceApi {
         }
       }
       throw AttendanceApiException(_firebaseMessage(error));
+    } catch (error) {
+      throw AttendanceApiException('Lỗi: $error');
     }
   }
 
@@ -2461,7 +2463,9 @@ class AttendanceApi {
     'unavailable' => 'Không thể kết nối Firebase. Hãy kiểm tra mạng.',
     'failed-precondition' =>
       'Firestore cần một index. Hãy deploy firestore.indexes.json.',
-    _ => error.message ?? 'Yêu cầu Firebase thất bại (${error.code}).',
+    _ => (error.message != null && error.message!.trim().isNotEmpty)
+        ? error.message!
+        : 'Yêu cầu Firebase thất bại [mã lỗi: ${error.code}].',
   };
 
   String _isoDate(DateTime value) =>

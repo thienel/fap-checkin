@@ -1,10 +1,12 @@
 import { initializeApp } from 'firebase/app';
 import {
-  browserSessionPersistence,
+  browserLocalPersistence,
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
   onAuthStateChanged,
   setPersistence,
+  signInWithPopup,
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
@@ -26,6 +28,14 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
+// Đồng bộ sang authDomain (firebaseapp.com) nếu đang mở trên .web.app để tránh Safari iOS chặn cookie chéo miền
+if (typeof window !== 'undefined' && window.location.hostname.endsWith('.web.app') && firebaseConfig.authDomain) {
+  const targetHost = firebaseConfig.authDomain;
+  if (targetHost && targetHost !== window.location.hostname) {
+    window.location.replace(`https://${targetHost}${window.location.pathname}${window.location.search}${window.location.hash}`);
+  }
+}
+
 const title = document.querySelector('#title');
 const message = document.querySelector('#message');
 const status = document.querySelector('#status');
@@ -39,8 +49,18 @@ const switchAccountButton = document.querySelector('#switch-account');
 const params = new URLSearchParams(window.location.search);
 const leaveClassId = params.get('leave');
 const urlToken = params.get('t');
-if (urlToken) sessionStorage.setItem('attendanceQrToken', urlToken);
-const token = urlToken || sessionStorage.getItem('attendanceQrToken');
+if (urlToken) {
+  sessionStorage.setItem('attendanceQrToken', urlToken);
+  try { localStorage.setItem('attendanceQrToken', urlToken); } catch (_) {}
+}
+const token = urlToken ||
+  sessionStorage.getItem('attendanceQrToken') ||
+  (() => { try { return localStorage.getItem('attendanceQrToken'); } catch (_) { return null; } })();
+
+function clearToken() {
+  sessionStorage.removeItem('attendanceQrToken');
+  try { localStorage.removeItem('attendanceQrToken'); } catch (_) {}
+}
 
 let auth;
 let db;
@@ -137,7 +157,7 @@ async function submitCheckIn(user, code) {
     if (!user.email) throw new Error('google-account-has-no-email');
     const result = await writeCheckIn(user, code);
 
-    sessionStorage.removeItem('attendanceQrToken');
+    clearToken();
     if (result.status === 'duplicate') {
       const presentation = duplicatePresentation(result.attendanceStatus, result.email);
       showStatus(presentation.kind, presentation.title, presentation.detail);
@@ -167,7 +187,7 @@ async function submitCheckIn(user, code) {
       return;
     }
     if (errorMessage.includes('qr-expired')) {
-      sessionStorage.removeItem('attendanceQrToken');
+      clearToken();
       showStatus('error', 'QR đã hết hạn', readableError(error, user?.email));
       await signOut(auth).catch(() => undefined);
       return;
@@ -306,11 +326,23 @@ async function bootstrap() {
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  await setPersistence(auth, browserSessionPersistence);
+  await setPersistence(auth, browserLocalPersistence);
 
   onAuthStateChanged(auth, (user) => {
     if (user) promptCheckoutCode(user);
   });
+
+  try {
+    const redirectResult = await getRedirectResult(auth);
+    if (redirectResult?.user) {
+      promptCheckoutCode(redirectResult.user);
+    }
+  } catch (error) {
+    console.error('getRedirectResult error:', error);
+    showStatus('error', 'Không thể hoàn tất đăng nhập', readableError(error), {
+      allowSignIn: true,
+    });
+  }
 
   checkoutForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -348,7 +380,19 @@ async function bootstrap() {
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
-      await signInWithRedirect(auth, provider);
+      try {
+        const result = await signInWithPopup(auth, provider);
+        if (result?.user) {
+          promptCheckoutCode(result.user);
+          return;
+        }
+      } catch (popupError) {
+        if (popupError?.code === 'auth/popup-blocked' || popupError?.code === 'auth/cancelled-popup-request') {
+          await signInWithRedirect(auth, provider);
+          return;
+        }
+        throw popupError;
+      }
     } catch (error) {
       console.error(error);
       signInButton.disabled = false;

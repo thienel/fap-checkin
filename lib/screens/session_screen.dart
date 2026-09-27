@@ -872,11 +872,14 @@ class _SessionScreenState extends State<SessionScreen> {
                 if (_qr != null)
                   ValueListenableBuilder<int>(
                     valueListenable: _qrValidityLeftNotifier,
-                    builder: (context, seconds, _) => Text(
-                      'QR còn hiệu lực: ${seconds}s',
-                      style: const TextStyle(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.w700,
+                    builder: (context, seconds, _) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'QR còn hiệu lực: ${seconds}s',
+                        style: const TextStyle(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ),
@@ -1491,24 +1494,28 @@ class _SessionScreenState extends State<SessionScreen> {
                       ),
                     ),
                     SizedBox(
-                      width: 150,
-                      child: Text(
-                        'Trạng thái',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                          color: AppColors.textMuted,
+                      width: 170,
+                      child: Center(
+                        child: Text(
+                          'Trạng thái',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            color: AppColors.textMuted,
+                          ),
                         ),
                       ),
                     ),
                     SizedBox(
                       width: 110,
-                      child: Text(
-                        'Giờ quét',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                          color: AppColors.textMuted,
+                      child: Center(
+                        child: Text(
+                          'Giờ quét',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            color: AppColors.textMuted,
+                          ),
                         ),
                       ),
                     ),
@@ -1660,23 +1667,27 @@ class _StudentListTile extends StatelessWidget {
               ),
               // Trạng thái điểm danh (Badge)
               SizedBox(
-                width: 150,
-                child: AppAttendanceBadge(
-                  status: item.status,
-                  pendingLabel: 'Chưa điểm danh',
+                width: 170,
+                child: Center(
+                  child: AppAttendanceBadge(
+                    status: item.status,
+                    pendingLabel: 'Chưa điểm danh',
+                  ),
                 ),
               ),
               // Giờ quét
               SizedBox(
                 width: 110,
-                child: Text(
-                  item.formattedCheckInTime,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: item.isPresent
-                        ? AppColors.text
-                        : AppColors.textMuted,
+                child: Center(
+                  child: Text(
+                    item.formattedCheckInTime,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: item.isPresent
+                          ? AppColors.text
+                          : AppColors.textMuted,
+                    ),
                   ),
                 ),
               ),

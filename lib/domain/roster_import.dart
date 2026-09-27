@@ -215,3 +215,58 @@ List<RosterRow> validateRosterRows(
 
 /// Chuan hoa email: trim + toLowerCase.
 String normalizeEmail(String value) => value.trim().toLowerCase();
+
+/// Tao RosterFile tu danh sach sinh vien nhan dien qua AI OCR.
+/// Co ho tro gop them voi [existingRows] hien co (tu dong loai bo sinh vien trung MSSV).
+RosterFile rosterFileFromOcrItems({
+  required String fileName,
+  required List<Map<String, String>> items,
+  List<List<String>>? existingRows,
+}) {
+  const headers = ['Mã sinh viên', 'Họ tên', 'Email'];
+  final rows = <List<String>>[];
+  final seenCodes = <String>{};
+  final seenEmails = <String>{};
+
+  if (existingRows != null) {
+    for (final r in existingRows) {
+      if (r.isNotEmpty) {
+        final code = r[0].trim().toUpperCase();
+        if (code.isNotEmpty) seenCodes.add(code);
+        if (r.length > 2) {
+          final em = r[2].trim().toLowerCase();
+          if (em.isNotEmpty) seenEmails.add(em);
+        }
+        rows.add(List<String>.from(r));
+      }
+    }
+  }
+
+  for (final item in items) {
+    final code = (item['studentCode'] ?? item['mssv'] ?? '').trim();
+    final name = (item['fullName'] ?? item['hoten'] ?? item['name'] ?? '').trim();
+    final email = (item['email'] ?? '').trim();
+    final normalizedCode = code.toUpperCase();
+    final normalizedEmail = email.toLowerCase();
+
+    final isDuplicateCode =
+        normalizedCode.isNotEmpty && seenCodes.contains(normalizedCode);
+    final isDuplicateEmail =
+        normalizedEmail.isNotEmpty && seenEmails.contains(normalizedEmail);
+
+    if (isDuplicateCode || isDuplicateEmail) {
+      continue;
+    }
+    if (normalizedCode.isNotEmpty) seenCodes.add(normalizedCode);
+    if (normalizedEmail.isNotEmpty) seenEmails.add(normalizedEmail);
+    rows.add([code, name, email]);
+  }
+
+  final rowNumbers = List<int>.generate(rows.length, (i) => i + 1);
+
+  return RosterFile(
+    headers: headers,
+    rows: rows,
+    rowNumbers: rowNumbers,
+  );
+}
