@@ -74,9 +74,6 @@ class _StartFailureApi implements AttendanceApi {
   }) async => const SheetSyncSummary();
 
   @override
-  Future<void> createTestCourseClassNow() async {}
-
-  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 

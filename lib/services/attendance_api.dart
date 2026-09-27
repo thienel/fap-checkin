@@ -5,7 +5,6 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 
 import '../domain/models.dart';
 import '../domain/class_overview.dart';
@@ -981,94 +980,6 @@ class AttendanceApi {
         });
       }
     });
-  });
-
-  /// Chỉ dùng cho debug/test thủ công. Không được gọi tự động trong production.
-  Future<void> createTestCourseClassNow() => _guard(() async {
-    // Task 1.4: Guard bằng kDebugMode để không tự ghi data trong production.
-    if (!kDebugMode) {
-      throw const AttendanceApiException(
-        'Chức năng tạo lớp demo chỉ khả dụng trong chế độ debug.',
-      );
-    }
-    // Phần còn lại của method không thay đổi:
-    final uid = _teacherUid();
-    final user = _auth.currentUser!;
-    final now = DateTime.now();
-    final date = _isoDate(now);
-    final classCode = 'DEMO_${date.replaceAll('-', '')}';
-    final reference = _firestore
-        .collection('courseClasses')
-        .doc('TEST_$classCode');
-    final schedule = generateDebugDaySchedule(now);
-
-    await _firestore.runTransaction((transaction) async {
-      final existing = await transaction.get(reference);
-      if (existing.exists) {
-        if (existing.data()?['ownerUid'] != uid) {
-          throw const AttendanceApiException(
-            'Lớp demo hôm nay đã thuộc một giảng viên khác.',
-          );
-        }
-        transaction.update(reference, {
-          'subject': debugCourseSubject,
-          'classCode': classCode,
-          'startDate': date,
-          'slotCount': schedule.length,
-          'weekLabel': 1,
-          'schedule': schedule
-              .map(
-                (item) => {
-                  'number': item.number,
-                  'date': _isoDate(item.date),
-                  'daySlot': item.daySlot,
-                },
-              )
-              .toList(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-        return;
-      }
-      transaction.set(reference, {
-        'subject': debugCourseSubject,
-        'classCode': classCode,
-        'startDate': date,
-        'slotCount': schedule.length,
-        'weekLabel': 1,
-        'schedule': schedule
-            .map(
-              (item) => {
-                'number': item.number,
-                'date': _isoDate(item.date),
-                'daySlot': item.daySlot,
-              },
-            )
-            .toList(),
-        'ownerUid': uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    });
-
-    // A generated demo course must be immediately testable. Add the current
-    // teacher email to its roster so the same Google account can scan the QR.
-    // Production courses still require the normal CSV/XLSX roster import.
-    final email = user.email?.trim();
-    if (email != null && email.isNotEmpty) {
-      final emailNormalized = email.toLowerCase();
-      final studentId = sha256.convert(utf8.encode(emailNormalized)).toString();
-      await reference.collection('students').doc(studentId).set({
-        'emailNormalized': emailNormalized,
-        'email': email,
-        'studentCode': 'DEMO',
-        'fullName': user.displayName?.trim().isNotEmpty == true
-            ? user.displayName!.trim()
-            : email.split('@').first,
-        'attendancePolicy': 'normal',
-        'active': true,
-        'importedAt': FieldValue.serverTimestamp(),
-        'importedBy': uid,
-      }, SetOptions(merge: true));
-    }
   });
 
   Future<List<TodaySlot>> getTodaySlots(DateTime date) =>

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -44,16 +43,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _weekStart = startOfWeek(DateTime.now());
     _refresh();
     unawaited(widget.api.syncPendingCheckIns().then((_) {}, onError: (_) {}));
-    if (kDebugMode) {
-      unawaited(
-        widget.api
-            .createTestCourseClassNow()
-            .then((_) {
-              if (mounted) _refresh();
-            })
-            .catchError((_) {}),
-      );
-    }
   }
 
   @override
@@ -129,27 +118,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (_) => CreateCourseDialog(api: widget.api),
     );
     if (mounted) _refresh();
-  }
-
-  Future<void> _createTestScheduleNow() async {
-    try {
-      await widget.api.createTestCourseClassNow();
-      if (!mounted) return;
-      _weekStart = startOfWeek(DateTime.now());
-      _refresh();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Đã đồng bộ PRM393 với 5 slot hôm nay. Bạn có thể bắt đầu điểm danh ngay.',
-          ),
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Không thể tạo lịch thử: $error')));
-    }
   }
 
   Future<void> _start(TodaySlot slot) async {
@@ -1149,11 +1117,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   tooltip: 'Làm mới',
                                   onPressed: _refresh,
                                   icon: const Icon(Icons.refresh),
-                                ),
-                                IconButton.filledTonal(
-                                  tooltip: 'Đồng bộ lịch test PRM393 hôm nay',
-                                  onPressed: _createTestScheduleNow,
-                                  icon: const Icon(Icons.science_outlined),
                                 ),
                                 FilledButton.icon(
                                   onPressed: _createCourse,
