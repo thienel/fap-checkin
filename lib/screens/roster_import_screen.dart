@@ -118,9 +118,9 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
   Future<void> _editOcrRow(int index) async {
     if (!_isOcrSource || _file == null || _importing || _scanningOcr) return;
     final row = _rows[index];
-    final code = TextEditingController(text: row.studentCode);
-    final name = TextEditingController(text: row.fullName);
-    final email = TextEditingController(text: row.email);
+    var code = row.studentCode;
+    var name = row.fullName;
+    var email = row.email;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -130,18 +130,21 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
-                controller: code,
+              TextFormField(
+                initialValue: code,
+                onChanged: (value) => code = value,
                 decoration: const InputDecoration(labelText: 'Mã sinh viên'),
               ),
               const SizedBox(height: AppSpace.md),
-              TextField(
-                controller: name,
+              TextFormField(
+                initialValue: name,
+                onChanged: (value) => name = value,
                 decoration: const InputDecoration(labelText: 'Họ tên'),
               ),
               const SizedBox(height: AppSpace.md),
-              TextField(
-                controller: email,
+              TextFormField(
+                initialValue: email,
+                onChanged: (value) => email = value,
                 decoration: const InputDecoration(labelText: 'Email'),
               ),
             ],
@@ -163,9 +166,9 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
       final old = _file!;
       final rows = old.rows.map((values) => List<String>.from(values)).toList();
       final values = {
-        RosterField.studentCode: code.text.trim(),
-        RosterField.fullName: name.text.trim(),
-        RosterField.email: email.text.trim(),
+        RosterField.studentCode: code.trim(),
+        RosterField.fullName: name.trim(),
+        RosterField.email: email.trim(),
       };
       for (final entry in values.entries) {
         final column = _mapping[entry.key];
@@ -183,9 +186,6 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
         _rows = validateRosterRows(updated, _mapping);
       });
     }
-    code.dispose();
-    name.dispose();
-    email.dispose();
   }
 
   Future<OcrScanAction?> _showOcrScanModeDialog() async {

@@ -47,7 +47,7 @@ class _LeaveRequestsScreenState extends State<LeaveRequestsScreen> {
   Future<void> _decide(LeaveRequest request, bool approve) async {
     final course = _selected;
     if (course == null || _deciding) return;
-    final controller = TextEditingController();
+    var responseText = '';
     final response = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -65,7 +65,7 @@ class _LeaveRequestsScreenState extends State<LeaveRequestsScreen> {
               Text(request.reason),
               const SizedBox(height: 16),
               TextField(
-                controller: controller,
+                onChanged: (value) => responseText = value,
                 autofocus: true,
                 maxLength: 1000,
                 maxLines: 3,
@@ -83,8 +83,8 @@ class _LeaveRequestsScreenState extends State<LeaveRequestsScreen> {
           ),
           FilledButton(
             onPressed: () {
-              if (controller.text.trim().isNotEmpty) {
-                Navigator.pop(context, controller.text.trim());
+              if (responseText.trim().isNotEmpty) {
+                Navigator.pop(context, responseText.trim());
               }
             },
             child: Text(approve ? 'Duyệt' : 'Từ chối'),
@@ -92,7 +92,6 @@ class _LeaveRequestsScreenState extends State<LeaveRequestsScreen> {
         ],
       ),
     );
-    controller.dispose();
     if (response == null || !mounted) return;
     setState(() => _deciding = true);
     try {

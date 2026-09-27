@@ -207,13 +207,13 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
 
   Future<void> _scanTimetable() async {
     if (GeminiOcrSettings.apiKey.trim().isEmpty) {
-      final controller = TextEditingController();
+      var apiKey = '';
       final key = await showDialog<String>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('Cài đặt quét ảnh'),
           content: TextField(
-            controller: controller,
+            onChanged: (value) => apiKey = value,
             obscureText: true,
             decoration: const InputDecoration(
               labelText: 'Gemini API key',
@@ -226,14 +226,12 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
               child: const Text('Hủy'),
             ),
             FilledButton(
-              onPressed: () =>
-                  Navigator.pop(dialogContext, controller.text.trim()),
+              onPressed: () => Navigator.pop(dialogContext, apiKey.trim()),
               child: const Text('Tiếp tục'),
             ),
           ],
         ),
       );
-      controller.dispose();
       if (key == null || key.isEmpty) return;
       try {
         await GeminiOcrSettings.saveLocalConfig(key, GeminiOcrSettings.model);

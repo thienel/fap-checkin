@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _BulkApi implements AttendanceApi {
   final calls = <List<String>>[];
+  ({String email, String studentCode, String fullName})? addedStudent;
+  ({String studentId, String studentCode, String fullName})? updatedStudent;
   final course = const CourseClassSummary(
     id: 'course-1',
     subject: 'PRM393',
@@ -46,6 +48,30 @@ class _BulkApi implements AttendanceApi {
       );
 
   @override
+  Future<void> addCourseStudent({
+    required String courseClassId,
+    required String email,
+    required String studentCode,
+    required String fullName,
+  }) async {
+    addedStudent = (email: email, studentCode: studentCode, fullName: fullName);
+  }
+
+  @override
+  Future<void> updateCourseStudent({
+    required String courseClassId,
+    required String studentId,
+    required String studentCode,
+    required String fullName,
+  }) async {
+    updatedStudent = (
+      studentId: studentId,
+      studentCode: studentCode,
+      fullName: fullName,
+    );
+  }
+
+  @override
   Future<BulkAttendanceResult> adjustAttendanceBulk({
     required String courseClassId,
     required int slot,
@@ -78,6 +104,55 @@ class _BulkApi implements AttendanceApi {
 }
 
 void main() {
+  testWidgets('student editor closes cleanly after saving', (tester) async {
+    final api = _BulkApi();
+    tester.view.physicalSize = const Size(1500, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ClassOverviewScreen(api: api)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<CourseClassSummary>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('PRM393 · SE1801').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Thêm sinh viên'));
+    await tester.pumpAndSettle();
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.at(0), 'new@fpt.edu.vn');
+    await tester.enterText(fields.at(1), 'SE194126');
+    await tester.enterText(fields.at(2), 'Nguyễn Văn A');
+    await tester.tap(find.text('Lưu').last);
+    await tester.pumpAndSettle();
+
+    expect(api.addedStudent, (
+      email: 'new@fpt.edu.vn',
+      studentCode: 'SE194126',
+      fullName: 'Nguyễn Văn A',
+    ));
+
+    final editButton = find.byTooltip('Sửa thông tin sinh viên').first;
+    await tester.ensureVisible(editButton);
+    await tester.tap(editButton);
+    await tester.pumpAndSettle();
+    final editFields = find.byType(TextFormField);
+    await tester.enterText(editFields.at(1), 'SE194127');
+    await tester.enterText(editFields.at(2), 'Nguyễn Văn B');
+    await tester.tap(find.text('Lưu').last);
+    await tester.pumpAndSettle();
+
+    expect(api.updatedStudent, (
+      studentId: 'student-0',
+      studentCode: 'SE194127',
+      fullName: 'Nguyễn Văn B',
+    ));
+  });
+
   testWidgets(
     'bulk edit reports partial failure and retries only failed students',
     (tester) async {

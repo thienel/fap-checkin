@@ -420,11 +420,9 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
   Future<({String email, String studentCode, String fullName})?> _studentEditor(
     CourseStudent? student,
   ) async {
-    final emailController = TextEditingController(text: student?.email ?? '');
-    final codeController = TextEditingController(
-      text: student?.studentCode ?? '',
-    );
-    final nameController = TextEditingController(text: student?.fullName ?? '');
+    var email = student?.email ?? '';
+    var studentCode = student?.studentCode ?? '';
+    var fullName = student?.fullName ?? '';
     final formKey = GlobalKey<FormState>();
     final result =
         await showDialog<({String email, String studentCode, String fullName})>(
@@ -441,7 +439,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextFormField(
-                      controller: emailController,
+                      initialValue: email,
+                      onSaved: (value) => email = value?.trim() ?? '',
                       readOnly: student != null,
                       keyboardType: TextInputType.emailAddress,
                       decoration: InputDecoration(
@@ -460,7 +459,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
-                      controller: codeController,
+                      initialValue: studentCode,
+                      onSaved: (value) => studentCode = value?.trim() ?? '',
                       textCapitalization: TextCapitalization.characters,
                       maxLength: 20,
                       decoration: const InputDecoration(
@@ -475,7 +475,8 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                     ),
                     const SizedBox(height: 4),
                     TextFormField(
-                      controller: nameController,
+                      initialValue: fullName,
+                      onSaved: (value) => fullName = value?.trim() ?? '',
                       maxLength: 120,
                       textCapitalization: TextCapitalization.words,
                       decoration: const InputDecoration(labelText: 'Họ và tên'),
@@ -500,10 +501,11 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
               FilledButton.icon(
                 onPressed: () {
                   if (!formKey.currentState!.validate()) return;
+                  formKey.currentState!.save();
                   Navigator.pop(dialogContext, (
-                    email: emailController.text.trim(),
-                    studentCode: codeController.text.trim(),
-                    fullName: nameController.text.trim(),
+                    email: email,
+                    studentCode: studentCode,
+                    fullName: fullName,
                   ));
                 },
                 icon: const Icon(Icons.save_outlined),
@@ -512,9 +514,6 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
             ],
           ),
         );
-    emailController.dispose();
-    codeController.dispose();
-    nameController.dispose();
     return result;
   }
 
@@ -708,27 +707,33 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final compactLayout = MediaQuery.sizeOf(context).width < 700;
     return LayoutBuilder(
-      builder: (context, constraints) => Padding(
-        padding: EdgeInsets.all(compactLayout ? AppSpace.md : AppSpace.xl),
-        child: compactLayout
-            ? SingleChildScrollView(
-                child: SizedBox(
-                  height: _overview == null
-                      ? constraints.maxHeight
-                      : constraints.maxHeight < 1100
-                      ? 1100
-                      : constraints.maxHeight,
-                  child: _buildPageContent(),
-                ),
-              )
-            : _buildPageContent(),
-      ),
+      builder: (context, constraints) {
+        final compactLayout = constraints.maxWidth < 700;
+        final padding = compactLayout ? AppSpace.md : AppSpace.xl;
+        final contentWidth = (constraints.maxWidth - 2 * padding)
+            .clamp(0.0, double.infinity)
+            .toDouble();
+        return Padding(
+          padding: EdgeInsets.all(padding),
+          child: compactLayout
+              ? SingleChildScrollView(
+                  child: SizedBox(
+                    height: _overview == null
+                        ? constraints.maxHeight
+                        : constraints.maxHeight < 1100
+                        ? 1100
+                        : constraints.maxHeight,
+                    child: _buildPageContent(compactLayout, contentWidth),
+                  ),
+                )
+              : _buildPageContent(compactLayout, contentWidth),
+        );
+      },
     );
   }
 
-  Widget _buildPageContent() => Column(
+  Widget _buildPageContent(bool compactLayout, double contentWidth) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       AppPageHeader(
@@ -736,12 +741,11 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
         subtitle: 'Theo dõi buổi học, chuyên cần và phiên điểm danh.',
         actions: [
           SizedBox(
-            width: MediaQuery.sizeOf(context).width < 700
-                ? MediaQuery.sizeOf(context).width - 2 * AppSpace.md
-                : 310,
+            width: compactLayout ? contentWidth : 310,
             child: FutureBuilder<List<CourseClassSummary>>(
               future: _classes,
               builder: (context, snapshot) => DropdownButtonFormField(
+                isExpanded: true,
                 initialValue: _selectedClass,
                 decoration: const InputDecoration(
                   labelText: 'Môn–lớp',
@@ -750,7 +754,13 @@ class _ClassOverviewScreenState extends State<ClassOverviewScreen> {
                 items: [
                   for (final course
                       in snapshot.data ?? const <CourseClassSummary>[])
-                    DropdownMenuItem(value: course, child: Text(course.label)),
+                    DropdownMenuItem(
+                      value: course,
+                      child: Text(
+                        course.label,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                 ],
                 onChanged: _selectClass,
               ),
