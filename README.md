@@ -30,9 +30,21 @@ Trong [Firebase Console](https://console.firebase.google.com/):
 
 ```bash
 firebase login
-firebase use fap-checkin
+firebase use fap-checkin-c8c8d
 firebase projects:list
 ```
+
+Nếu ứng dụng báo thiếu quyền, kiểm tra email và UID trong đúng project mà
+desktop đang dùng bằng Firebase CLI (không cần mật khẩu tài khoản giảng viên):
+
+```bash
+node tool/teacher_access.cjs giangvien@example.com
+```
+
+Chỉ khi document `teachers/<UID>` chưa có `active: true`, chạy lại với
+`node tool/teacher_access.cjs giangvien@example.com --grant` để cấp quyền cho đúng UID. Lệnh giữ nguyên các trường khác của
+document hiện có. `node tool/teacher_access.cjs --rules` đối chiếu Rules đang
+triển khai với `firestore.rules` trong repo.
 
 ## 2. Cấu hình trang check-in
 

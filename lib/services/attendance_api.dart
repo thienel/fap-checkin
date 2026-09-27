@@ -2428,13 +2428,36 @@ class AttendanceApi {
     } on AttendanceApiException {
       rethrow;
     } on FirebaseException catch (error) {
+      if (error.code == 'permission-denied') {
+        final uid = _auth.currentUser?.uid;
+        if (uid != null) {
+          try {
+            final teacher = await _firestore
+                .collection('teachers')
+                .doc(uid)
+                .get(const GetOptions(source: Source.server));
+            if (teacher.data()?['active'] == true) {
+              throw const AttendanceApiException(
+                'Firestore từ chối thao tác. Tài khoản đã có quyền giảng viên; '
+                'hãy kiểm tra quyền sở hữu lớp hoặc quy tắc truy cập dữ liệu.',
+              );
+            }
+            throw const AttendanceApiException(
+              'Tài khoản chưa được cấp quyền giảng viên. '
+              'Hãy kiểm tra teachers/<UID> có active: true trong đúng dự án Firebase.',
+            );
+          } on FirebaseException {
+            // Keep the original error if the role document cannot be read.
+          }
+        }
+      }
       throw AttendanceApiException(_firebaseMessage(error));
     }
   }
 
   String _firebaseMessage(FirebaseException error) => switch (error.code) {
     'permission-denied' =>
-      'Tài khoản chưa có quyền giảng viên hoặc thao tác không hợp lệ.',
+      'Firestore từ chối thao tác. Hãy kiểm tra quyền truy cập dữ liệu.',
     'unavailable' => 'Không thể kết nối Firebase. Hãy kiểm tra mạng.',
     'failed-precondition' =>
       'Firestore cần một index. Hãy deploy firestore.indexes.json.',
