@@ -59,6 +59,24 @@ void main() {
     ]);
   });
 
+  test('suy ra ngày buổi 1 từ ngày một buổi trong ảnh cho mọi nhịp học', () {
+    final startDate = DateTime(2026, 9, 17);
+    for (final preset in SchedulePreset.values) {
+      final slots = generateSchedule(startDate: startDate, preset: preset);
+      for (final slot in slots) {
+        expect(
+          inferScheduleStartDate(
+            observedDate: slot.date,
+            sessionNumber: slot.number,
+            preset: preset,
+          ),
+          startDate,
+          reason: '${preset.label} · buổi ${slot.number}',
+        );
+      }
+    }
+  });
+
   test('lịch mười tuần giữ nguyên thứ', () {
     final slots = generateSchedule(
       startDate: DateTime(2026, 9, 16),

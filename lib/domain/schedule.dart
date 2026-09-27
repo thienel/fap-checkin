@@ -111,11 +111,56 @@ List<ScheduledSlot> generateSchedule({
   return result;
 }
 
+/// Suy ra ngày buổi 1 từ ngày của một buổi đã đọc được trong thời khóa biểu.
+DateTime inferScheduleStartDate({
+  required DateTime observedDate,
+  required int sessionNumber,
+  required SchedulePreset preset,
+}) {
+  if (sessionNumber < 1 || sessionNumber > preset.slotCount) {
+    throw RangeError.range(sessionNumber, 1, preset.slotCount, 'sessionNumber');
+  }
+  var current = DateTime(
+    observedDate.year,
+    observedDate.month,
+    observedDate.day,
+  );
+  if (current.weekday == DateTime.sunday) {
+    throw ArgumentError.value(
+      observedDate,
+      'observedDate',
+      'Không được là Chủ nhật',
+    );
+  }
+  for (var index = 1; index < sessionNumber; index++) {
+    current = switch (preset) {
+      SchedulePreset.twentySlotsTenWeeks ||
+      SchedulePreset.tenSlotsFiveWeeks => _subtractTeachingDays(current, 3),
+      SchedulePreset.tenSlotsTenWeeks => current.subtract(
+        const Duration(days: 7),
+      ),
+      SchedulePreset.twentySlotsThreeWeeks ||
+      SchedulePreset.tenSlotsThreeWeeks => _subtractTeachingDays(current, 1),
+    };
+  }
+  return current;
+}
+
 DateTime _addTeachingDays(DateTime date, int count) {
   var cursor = date;
   var remaining = count;
   while (remaining > 0) {
     cursor = cursor.add(const Duration(days: 1));
+    if (cursor.weekday != DateTime.sunday) remaining--;
+  }
+  return cursor;
+}
+
+DateTime _subtractTeachingDays(DateTime date, int count) {
+  var cursor = date;
+  var remaining = count;
+  while (remaining > 0) {
+    cursor = cursor.subtract(const Duration(days: 1));
     if (cursor.weekday != DateTime.sunday) remaining--;
   }
   return cursor;

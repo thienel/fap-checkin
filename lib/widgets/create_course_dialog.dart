@@ -20,20 +20,19 @@ class CreateCourseDialog extends StatefulWidget {
 }
 
 class _CreateCourseDialogState extends State<CreateCourseDialog> {
-  final _formKey = GlobalKey<FormState>();
+  GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final _subjectController = TextEditingController();
   final _classController = TextEditingController();
   final _termController = TextEditingController();
   final _ocr = GeminiOcrService();
-  DateTime _startDate = DateTime.now();
-  SchedulePreset _preset = SchedulePreset.twentySlotsTenWeeks;
-  int _daySlot = 1;
+  DateTime? _startDate = DateTime.now();
+  SchedulePreset? _preset = SchedulePreset.twentySlotsTenWeeks;
+  int? _daySlot = 1;
   bool _submitting = false;
   bool _scanning = false;
   bool _createdAny = false;
-  bool _reviewStartDate = false;
-  bool _reviewPreset = false;
-  bool _reviewDaySlot = false;
+  bool _attemptedSubmit = false;
+  bool _dateManuallyEdited = false;
   int _selectionVersion = 0;
   List<OcrTimetableItem> _ocrItems = [];
   int? _selectedOcrIndex;
@@ -42,10 +41,10 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   @override
   void initState() {
     super.initState();
-    if (_startDate.weekday == DateTime.sunday) {
-      _startDate = _startDate.add(const Duration(days: 1));
+    if (_startDate!.weekday == DateTime.sunday) {
+      _startDate = _startDate!.add(const Duration(days: 1));
     }
-    _termController.text = _suggestedTerm(_startDate);
+    _termController.text = _suggestedTerm(_startDate!);
   }
 
   @override
@@ -58,20 +57,32 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   }
 
   Future<void> _pickDate() async {
+    var initialDate = _startDate ?? DateTime.now();
+    if (initialDate.weekday == DateTime.sunday) {
+      initialDate = initialDate.add(const Duration(days: 1));
+    }
+    if (initialDate.isBefore(DateTime(2020))) {
+      initialDate = DateTime(2020, 1, 1);
+    }
+    if (initialDate.isAfter(DateTime(2100, 12, 31))) {
+      initialDate = DateTime(2100, 12, 31);
+    }
     final selected = await showDatePicker(
       context: context,
       firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
-      initialDate: _startDate,
+      lastDate: DateTime(2100, 12, 31),
+      initialDate: initialDate,
       selectableDayPredicate: (date) => date.weekday != DateTime.sunday,
     );
     if (selected != null) {
       setState(() {
         final usedSuggestion =
-            _termController.text == _suggestedTerm(_startDate);
+            _startDate == null ||
+            _termController.text == _suggestedTerm(_startDate!);
         _startDate = selected;
         if (usedSuggestion) _termController.text = _suggestedTerm(selected);
-        _reviewStartDate = false;
+        _dateManuallyEdited = true;
+        _error = null;
       });
     }
   }
@@ -86,13 +97,12 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   }
 
   Future<void> _submit() async {
+    setState(() => _attemptedSubmit = true);
     if (!_formKey.currentState!.validate()) return;
-    if (_reviewStartDate || _reviewPreset || _reviewDaySlot) {
-      setState(
-        () => _error = 'Kiểm tra các mục được đánh dấu trong phần Lịch học.',
-      );
-      return;
-    }
+    final startDate = _startDate;
+    final preset = _preset;
+    final daySlot = _daySlot;
+    if (startDate == null || preset == null || daySlot == null) return;
     setState(() {
       _submitting = true;
       _error = null;
@@ -102,9 +112,9 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
         subject: _subjectController.text,
         classCode: _classController.text,
         academicTerm: _termController.text,
-        startDate: _startDate,
-        preset: _preset,
-        daySlot: _daySlot,
+        startDate: startDate,
+        preset: preset,
+        daySlot: daySlot,
       );
       if (!mounted) return;
       _createdAny = true;
@@ -134,33 +144,42 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
 
   void _selectOcrItem(int index) {
     final item = _ocrItems[index];
+    _formKey = GlobalKey<FormState>();
     _selectedOcrIndex = index;
     _subjectController.text = item.subject;
     _classController.text = item.classCode;
-    if (item.date != null) {
-      _startDate = item.date!;
-    } else {
-      _startDate = DateTime.now();
-      if (_startDate.weekday == DateTime.sunday) {
-        _startDate = _startDate.add(const Duration(days: 1));
-      }
-    }
-    if (_startDate.weekday == DateTime.sunday) {
-      _startDate = _startDate.add(const Duration(days: 1));
-    }
-    _termController.text = _suggestedTerm(_startDate);
-    _reviewStartDate =
-        item.date == null ||
-        item.date!.weekday == DateTime.sunday ||
-        item.sessionNumber != 1;
-    _reviewPreset = true;
-    _reviewDaySlot = item.daySlot == null;
-    _preset = item.totalSessions == 10
-        ? SchedulePreset.tenSlotsFiveWeeks
-        : SchedulePreset.twentySlotsTenWeeks;
-    _daySlot = item.daySlot ?? 1;
+    _preset = switch (item.totalSessions) {
+      10 => SchedulePreset.tenSlotsFiveWeeks,
+      20 => SchedulePreset.twentySlotsTenWeeks,
+      _ => null,
+    };
+    _startDate = _suggestedStartDate(item, _preset);
+    _termController.text = _startDate == null
+        ? ''
+        : _suggestedTerm(_startDate!);
+    _daySlot = item.daySlot;
+    _attemptedSubmit = false;
+    _dateManuallyEdited = false;
     _selectionVersion++;
     _error = null;
+  }
+
+  DateTime? _suggestedStartDate(OcrTimetableItem item, SchedulePreset? preset) {
+    final observedDate = item.date;
+    if (observedDate == null) return null;
+    final sessionNumber = item.sessionNumber;
+    if (preset == null ||
+        sessionNumber == null ||
+        sessionNumber < 1 ||
+        sessionNumber > preset.slotCount) {
+      return observedDate;
+    }
+    final inferred = inferScheduleStartDate(
+      observedDate: observedDate,
+      sessionNumber: sessionNumber,
+      preset: preset,
+    );
+    return inferred.isBefore(DateTime(2020)) ? observedDate : inferred;
   }
 
   Future<void> _scanTimetable() async {
@@ -247,11 +266,13 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final preview = generateSchedule(startDate: _startDate, preset: _preset);
+    final preview = _startDate != null && _preset != null
+        ? generateSchedule(startDate: _startDate!, preset: _preset!)
+        : null;
     return AlertDialog(
       title: const Text('Thêm lớp môn'),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 620),
+      content: SizedBox(
+        width: 620,
         child: SingleChildScrollView(
           child: Form(
             key: _formKey,
@@ -398,12 +419,17 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                             suffixIcon: const Icon(
                               Icons.calendar_month_outlined,
                             ),
-                            errorText: _reviewStartDate
+                            errorText: _attemptedSubmit && _startDate == null
                                 ? 'Chọn ngày buổi 1'
                                 : null,
                           ),
                           child: Text(
-                            DateFormat('dd/MM/yyyy').format(_startDate),
+                            _startDate == null
+                                ? 'Chọn ngày'
+                                : DateFormat('dd/MM/yyyy').format(_startDate!),
+                            style: _startDate == null
+                                ? const TextStyle(color: AppColors.textMuted)
+                                : null,
                           ),
                         ),
                       ),
@@ -415,8 +441,9 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                         initialValue: _preset,
                         decoration: InputDecoration(
                           labelText: 'Số buổi · nhịp học',
-                          errorText: _reviewPreset
-                              ? 'Xác nhận lịch gợi ý'
+                          hintText: 'Chọn lịch học',
+                          errorText: _attemptedSubmit && _preset == null
+                              ? 'Chọn lịch học'
                               : null,
                         ),
                         items: SchedulePreset.values
@@ -428,8 +455,25 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                             )
                             .toList(),
                         onChanged: (value) => setState(() {
-                          _preset = value!;
-                          _reviewPreset = false;
+                          final previousDate = _startDate;
+                          final usedSuggestion =
+                              previousDate == null ||
+                              _termController.text ==
+                                  _suggestedTerm(previousDate);
+                          _preset = value;
+                          if (!_dateManuallyEdited &&
+                              _selectedOcrIndex != null) {
+                            _startDate = _suggestedStartDate(
+                              _ocrItems[_selectedOcrIndex!],
+                              value,
+                            );
+                            if (usedSuggestion) {
+                              _termController.text = _startDate == null
+                                  ? ''
+                                  : _suggestedTerm(_startDate!);
+                            }
+                          }
+                          _error = null;
                         }),
                       ),
                     ),
@@ -438,11 +482,13 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                 const SizedBox(height: AppSpace.md),
                 DropdownButtonFormField<int>(
                   key: ValueKey('slot-$_selectionVersion'),
-                  initialValue: _reviewDaySlot ? null : _daySlot,
+                  initialValue: _daySlot,
                   decoration: InputDecoration(
                     labelText: 'Giờ học (slot)',
                     hintText: 'Chọn slot',
-                    errorText: _reviewDaySlot ? 'Chọn slot trong ngày' : null,
+                    errorText: _attemptedSubmit && _daySlot == null
+                        ? 'Chọn slot trong ngày'
+                        : null,
                   ),
                   items: daySlotDefinitions
                       .map(
@@ -453,48 +499,42 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                       )
                       .toList(),
                   onChanged: (value) => setState(() {
-                    _daySlot = value!;
-                    _reviewDaySlot = false;
+                    _daySlot = value;
+                    _error = null;
                   }),
                 ),
-                if (_reviewPreset) ...[
-                  const SizedBox(height: AppSpace.sm),
-                  TextButton.icon(
-                    onPressed: () => setState(() => _reviewPreset = false),
-                    icon: const Icon(Icons.check_circle_outline),
-                    label: const Text('Dùng lịch gợi ý này'),
+                if (preview != null) ...[
+                  const SizedBox(height: AppSpace.lg),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(AppSpace.lg),
+                    decoration: BoxDecoration(
+                      color: AppColors.infoSurface,
+                      borderRadius: BorderRadius.circular(AppRadii.control),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Lịch dự kiến',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.info,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpace.xs),
+                        Text(
+                          '${DateFormat('dd/MM/yyyy').format(preview.first.date)} – ${DateFormat('dd/MM/yyyy').format(preview.last.date)}',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        Text(
+                          '${preview.length} buổi · ${_daySlot == null ? 'Chưa chọn slot' : 'Slot $_daySlot'}',
+                          style: const TextStyle(color: AppColors.textMuted),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
-                const SizedBox(height: AppSpace.lg),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(AppSpace.lg),
-                  decoration: BoxDecoration(
-                    color: AppColors.infoSurface,
-                    borderRadius: BorderRadius.circular(AppRadii.control),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Lịch dự kiến',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.info,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpace.xs),
-                      Text(
-                        '${DateFormat('dd/MM/yyyy').format(preview.first.date)} – ${DateFormat('dd/MM/yyyy').format(preview.last.date)}',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      Text(
-                        '${preview.length} buổi · ${_reviewDaySlot ? 'Chưa chọn slot' : 'Slot $_daySlot'}',
-                        style: const TextStyle(color: AppColors.textMuted),
-                      ),
-                    ],
-                  ),
-                ),
                 if (_error != null) ...[
                   const SizedBox(height: 12),
                   AppNotice(
