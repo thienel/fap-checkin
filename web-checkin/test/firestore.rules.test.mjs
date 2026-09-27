@@ -13,6 +13,7 @@ import {
   getDoc,
   getDocs,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -323,6 +324,37 @@ test('course instances are isolated by owner and academic term', async () => {
     classCode: 'SE01', courseClassId: 'instance-duplicate', createdAt: serverTimestamp(),
   });
   await assertFails(duplicate.commit());
+});
+
+test('teacher can create a course with its claim and schedule lock in a transaction', async () => {
+  const db = testEnvironment.authenticatedContext(teacherUid).firestore();
+  const course = doc(db, 'courseClasses', 'transaction-course');
+  const claim = doc(db, 'courseClassClaims', `${teacherUid}_2026-FALL_PRM393_SE99`);
+  const lock = doc(db, 'teacherScheduleLocks', `${teacherUid}_2026-10-01_2`);
+
+  await assertSucceeds(runTransaction(db, async (transaction) => {
+    const claimSnapshot = await transaction.get(claim);
+    const lockSnapshot = await transaction.get(lock);
+    if (claimSnapshot.exists() || lockSnapshot.exists()) {
+      throw new Error('Expected an unused course claim and schedule lock.');
+    }
+    transaction.set(course, {
+      subject: 'PRM393', classCode: 'SE99', academicTerm: '2026-FALL',
+      startDate: '2026-10-01', slotCount: 1, weekLabel: 1,
+      slotDurationMinutes: 135,
+      schedule: [{ number: 1, date: '2026-10-01', daySlot: 2 }],
+      ownerUid: teacherUid, createdAt: serverTimestamp(),
+    });
+    transaction.set(claim, {
+      ownerUid: teacherUid, academicTerm: '2026-FALL', subject: 'PRM393',
+      classCode: 'SE99', courseClassId: course.id, createdAt: serverTimestamp(),
+    });
+    transaction.set(lock, {
+      ownerUid: teacherUid, date: '2026-10-01', daySlot: 2,
+      courseClassId: course.id, subject: 'PRM393', classCode: 'SE99',
+      slotNumber: 1, createdAt: serverTimestamp(),
+    });
+  }));
 });
 
 test('course owner can list canonical records for a slot', async () => {

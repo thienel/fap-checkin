@@ -130,7 +130,8 @@ service cloud.firestore {
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.keys().hasOnly([
           'subject', 'classCode', 'startDate', 'slotCount', 'weekLabel',
-          'schedule', 'ownerUid', 'academicTerm', 'createdAt'
+          'slotDurationMinutes', 'schedule', 'ownerUid', 'academicTerm',
+          'createdAt'
         ])
         && (('academicTerm' in request.resource.data)
           ? getAfter(/databases/$(database)/documents/courseClassClaims/$(request.auth.uid + '_' + request.resource.data.academicTerm + '_' + request.resource.data.subject + '_' + request.resource.data.classCode)).data.courseClassId == courseClassId
