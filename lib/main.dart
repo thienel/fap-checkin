@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'firebase_options.dart';
+import 'services/gemini_ocr_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await GeminiOcrSettings.loadLocalConfig();
 
   Object? configurationError;
   if (DesktopFirebaseOptions.isConfigured) {

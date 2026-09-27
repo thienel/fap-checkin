@@ -23,17 +23,10 @@ abstract final class DesktopFirebaseOptions {
   );
   static const appsScriptUrl = String.fromEnvironment('APPS_SCRIPT_URL');
   static const appsScriptSecret = String.fromEnvironment('APPS_SCRIPT_SECRET');
-  static const geminiApiKey = String.fromEnvironment('GEMINI_API_KEY');
-  static const geminiModel = String.fromEnvironment(
-    'GEMINI_MODEL',
-    defaultValue: 'gemini-3.5-flash-lite',
-  );
 
   static String get publicWebUrl => _configuredPublicWebUrl.isNotEmpty
       ? _configuredPublicWebUrl.replaceFirst(RegExp(r'/$'), '')
       : 'https://$projectId.web.app';
-
-  static bool get isGeminiConfigured => geminiApiKey.isNotEmpty;
 
   static bool get isSheetSyncConfigured =>
       appsScriptUrl.isNotEmpty && appsScriptSecret.isNotEmpty;

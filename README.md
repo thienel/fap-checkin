@@ -118,7 +118,29 @@ cp firebase.desktop.example.json firebase.desktop.json
 }
 ```
 
-`firebase.desktop.json`, `web-checkin/.env` và các secret không được commit lên Git.
+`firebase.desktop.json`, `gemini.local.json`, `web-checkin/.env` và các secret không được commit lên Git.
+
+### Nhập dữ liệu từ ảnh
+
+Sao chép `gemini.local.example.json` thành `gemini.local.json`, rồi điền
+`GEMINI_API_KEY` một lần. Khi chạy từ mã nguồn, đặt file ở thư mục gốc project.
+Nếu chạy bản desktop đã đóng gói, có thể đặt file cạnh chương trình hoặc nhập
+key một lần trong app; app sẽ lưu file trong thư mục cấu hình của người dùng.
+
+Trong **Danh sách sinh viên**, chọn **Quét ảnh AI (OCR)**, kiểm tra bảng nhận dạng
+và chạm từng dòng để sửa. Nếu ảnh không có
+email, ô email để trống và phải được điền trước khi import.
+
+Trong **Lịch hôm nay** hoặc **Lịch trong tuần**, chọn **Tạo môn–lớp → Quét ảnh TKB**.
+Các môn nhận dạng được hiện trong danh sách; kiểm tra từng môn, ngày bắt đầu của
+buổi 1, cấu hình số buổi và slot rồi mới tạo. Ảnh của một tuần không đủ để suy ra
+toàn bộ lịch học kỳ.
+
+Gemini API key được lưu trong `gemini.local.json` trên máy và gửi đến Gemini qua
+HTTPS. Không đặt key này trong `firebase.desktop.json` hoặc bản build desktop.
+Vì ứng dụng gọi Gemini trực tiếp từ máy giảng viên, người dùng trên máy đó vẫn có
+thể truy cập key của chính phiên chạy; nếu cần một key dùng chung, phải chuyển lời
+gọi OCR sang dịch vụ máy chủ giữ secret.
 
 ## 5. Cài đặt và deploy trên Spark
 

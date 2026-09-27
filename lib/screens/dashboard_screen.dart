@@ -94,11 +94,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _createCourse() async {
-    final created = await showDialog<bool>(
+    await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (_) => CreateCourseDialog(api: widget.api),
     );
-    if (created == true) _refresh();
+    if (mounted) _refresh();
   }
 
   Future<void> _createTestScheduleNow() async {

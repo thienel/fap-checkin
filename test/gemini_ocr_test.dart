@@ -1,8 +1,70 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fap_check_attendance/domain/roster_import.dart';
 import 'package:fap_check_attendance/services/gemini_ocr_service.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 void main() {
+  test(
+    'OCR request keeps the key out of the URL and reports no raw API body',
+    () async {
+      final client = MockClient((request) async {
+        expect(request.url.query, isEmpty);
+        expect(request.headers['x-goog-api-key'], 'private-key');
+        return http.Response('server message with private-key', 400);
+      });
+      final service = GeminiOcrService(client: client);
+      await expectLater(
+        service.scanStudentsFromImage(
+          imageBytes: Uint8List.fromList([1]),
+          explicitApiKey: 'private-key',
+        ),
+        throwsA(
+          predicate((error) => !error.toString().contains('private-key')),
+        ),
+      );
+    },
+  );
+
+  test(
+    'timetable OCR keeps one course and uses its earliest visible session',
+    () {
+      final raw = jsonEncode([
+        {
+          'subject': 'PRM393',
+          'classCode': 'SE1801',
+          'date': '2026-09-30',
+          'daySlot': 3,
+          'sessionNumber': 2,
+          'totalSessions': 20,
+        },
+        {
+          'subject': 'PRM393',
+          'classCode': 'SE1801',
+          'date': '2026-09-28',
+          'daySlot': 2,
+          'sessionNumber': 1,
+          'totalSessions': 20,
+        },
+        {
+          'subject': 'MAD101',
+          'classCode': 'SE1802',
+          'date': '2026-02-30',
+          'daySlot': 8,
+        },
+      ]);
+      final items = GeminiOcrService.parseTimetableJson(raw);
+      expect(items, hasLength(2));
+      expect(items.first.sessionNumber, 1);
+      expect(items.first.date, DateTime(2026, 9, 28));
+      expect(items.last.date, isNull);
+      expect(items.last.daySlot, isNull);
+    },
+  );
+
   group('GeminiOcrService JSON parsing', () {
     test('parses pure JSON array with fpt.edu.vn and gmail.com emails', () {
       const raw = '''
@@ -51,8 +113,10 @@ void main() {
       expect(items.single.email, 'ThienNMHSE172145@fpt.edu.vn');
     });
 
-    test('extracts JSON when wrapped in an object like {"students": [...]}', () {
-      const rawObject = '''
+    test(
+      'extracts JSON when wrapped in an object like {"students": [...]}',
+      () {
+        const rawObject = '''
 {
   "students": [
     {
@@ -64,15 +128,18 @@ void main() {
 }
 ''';
 
-      final items = GeminiOcrService.parseOcrJson(rawObject);
-      expect(items, hasLength(1));
-      expect(items.single.studentCode, 'SE182112');
-      expect(items.single.fullName, 'Trần Phạm Khánh Quốc');
-    });
+        final items = GeminiOcrService.parseOcrJson(rawObject);
+        expect(items, hasLength(1));
+        expect(items.single.studentCode, 'SE182112');
+        expect(items.single.fullName, 'Trần Phạm Khánh Quốc');
+      },
+    );
 
     test('throws FormatException on empty or non-JSON response', () {
       expect(
-        () => GeminiOcrService.parseOcrJson('Xin chào, tôi không tìm thấy bảng nào.'),
+        () => GeminiOcrService.parseOcrJson(
+          'Xin chào, tôi không tìm thấy bảng nào.',
+        ),
         throwsA(isA<FormatException>()),
       );
     });
