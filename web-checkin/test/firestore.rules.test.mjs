@@ -9,6 +9,7 @@ import {
 import {
   collection,
   collectionGroup,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -370,6 +371,76 @@ test('course owner can list canonical records for a slot', async () => {
 
   const snapshot = await assertSucceeds(getDocs(records));
   if (snapshot.size !== 1) throw new Error(`Expected one record, got ${snapshot.size}.`);
+});
+
+test('student check-in accepts the current checkout code and rejects a wrong code', async () => {
+  const sessionId = 'checkout-code-test-session';
+  const qrToken = 'checkout-code-test-token';
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    const admin = context.firestore();
+    await setDoc(doc(admin, 'attendanceSessions', sessionId), {
+      ownerUid: teacherUid, courseClassId, subject: 'PRM393', classCode: 'DEMO',
+      slot: 1, slotKey: '1', date: '2026-09-20', status: 'active',
+      validitySeconds: 120, currentQrGeneration: 1,
+    });
+    await setDoc(doc(admin, 'qrTokens', qrToken), {
+      ownerUid: teacherUid, sessionId, issuedAt: new Date(),
+      validitySeconds: 120, qrGeneration: 1,
+    });
+    await setDoc(doc(admin, 'attendanceCheckoutCodes', sessionId), {
+      ownerUid: teacherUid, sessionId, code: 'ABC23',
+      rotationSeconds: 120, generation: 1, issuedAt: new Date(),
+    });
+  });
+
+  const db = testEnvironment.authenticatedContext(studentUid, {
+    email: 'student1@fpt.edu.vn',
+    firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const record = doc(db, 'attendance', courseClassId, 'slots', '1', 'records', 'student-hash-1');
+  const payload = {
+    ownerUid: teacherUid, firebaseUid: studentUid, studentId: 'student-hash-1',
+    email: 'student1@fpt.edu.vn', emailNormalized: 'student1@fpt.edu.vn',
+    studentCode: 'SE001', fullName: 'Nguyen Van A', sessionId,
+    courseClassId, subject: 'PRM393', classCode: 'DEMO',
+    slot: 1, slotKey: '1', date: '2026-09-20', qrToken,
+    checkedInAt: serverTimestamp(), createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(), updatedBy: studentUid,
+    syncStatus: 'pending', revision: 1, attendanceStatus: 'present',
+    recordSource: 'qr',
+  };
+  await assertFails(setDoc(record, { ...payload, checkoutCode: 'WRONG' }));
+  await assertSucceeds(setDoc(record, { ...payload, checkoutCode: 'ABC23' }));
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    await deleteDoc(doc(context.firestore(), 'attendance', courseClassId, 'slots', '1', 'records', 'student-hash-1'));
+  });
+
+  const teacherDb = testEnvironment.authenticatedContext(teacherUid).firestore();
+  await assertSucceeds(updateDoc(doc(teacherDb, 'attendanceCheckoutCodes', sessionId), {
+    code: 'DEF45', previousCode: 'ABC23', previousCodeGeneration: 1,
+    generation: 2,
+    issuedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(record, { ...payload, checkoutCode: 'ABC23' }));
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    const admin = context.firestore();
+    await deleteDoc(doc(admin, 'attendance', courseClassId, 'slots', '1', 'records', 'student-hash-1'));
+    await updateDoc(doc(admin, 'attendanceCheckoutCodes', sessionId), {
+      issuedAt: new Date(Date.now() - 15_000),
+    });
+  });
+  await assertFails(setDoc(record, { ...payload, checkoutCode: 'ABC23' }));
+
+  // An already-running older desktop client can still rotate its code. Its
+  // unchanged previousCode must not become valid again after that rotation.
+  await assertSucceeds(updateDoc(doc(teacherDb, 'attendanceCheckoutCodes', sessionId), {
+    code: 'GHI67', generation: 3, issuedAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(record, { ...payload, checkoutCode: 'ABC23' }));
+  await assertSucceeds(setDoc(record, { ...payload, checkoutCode: 'GHI67' }));
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    await deleteDoc(doc(context.firestore(), 'attendance', courseClassId, 'slots', '1', 'records', 'student-hash-1'));
+  });
 });
 
 test('teacher can query only their pending records across slots', async () => {

@@ -214,6 +214,7 @@ Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore n
 ## Quy tắc bảo mật và dữ liệu
 
 - Thời hạn QR được tính từ `serverTimestamp()` của Firestore, không tin đồng hồ điện thoại hay desktop.
+- Checkout code được đổi trước hạn vài giây; mã vừa đổi vẫn hợp lệ thêm 10 giây để tránh từ chối lượt gửi đang thực hiện.
 - Security Rules từ chối đọc QR sau thời hạn và từ chối ghi khi session đã dừng.
 - Trạng thái cuối có đường dẫn `attendance/<môn-lớp>/slots/<slot>/records/<student-id>`; QR chỉ được tạo trạng thái `present`, còn giảng viên mới có quyền chỉnh `present/absent/excused`.
 - Mỗi lần giảng viên chỉnh tay tạo một document bất biến trong `records/<student-id>/audit`; tắt miễn toàn khóa không sửa lịch sử các slot cũ.

@@ -2,12 +2,9 @@ import { initializeApp } from 'firebase/app';
 import {
   browserLocalPersistence,
   getAuth,
-  getRedirectResult,
-  GoogleAuthProvider,
+  inMemoryPersistence,
   onAuthStateChanged,
   setPersistence,
-  signInWithPopup,
-  signInWithRedirect,
   signOut,
 } from 'firebase/auth';
 import {
@@ -18,6 +15,8 @@ import {
 } from 'firebase/firestore';
 import './style.css';
 import { duplicatePresentation } from './duplicate_status.js';
+import { googleSignInError, signInWithGoogle } from './google_sign_in.js';
+import { signInBrowserProblem } from './browser_environment.js';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -41,6 +40,9 @@ const message = document.querySelector('#message');
 const status = document.querySelector('#status');
 const announcement = document.querySelector('#announcement');
 const signInButton = document.querySelector('#sign-in');
+const browserHelp = document.querySelector('#browser-help');
+const copyLinkButton = document.querySelector('#copy-link');
+const copyLinkStatus = document.querySelector('#copy-link-status');
 const checkoutForm = document.querySelector('#checkout-form');
 const checkoutCodeInput = document.querySelector('#checkout-code');
 const codeError = document.querySelector('#code-error');
@@ -50,15 +52,15 @@ const params = new URLSearchParams(window.location.search);
 const leaveClassId = params.get('leave');
 const urlToken = params.get('t');
 if (urlToken) {
-  sessionStorage.setItem('attendanceQrToken', urlToken);
+  try { sessionStorage.setItem('attendanceQrToken', urlToken); } catch (_) {}
   try { localStorage.setItem('attendanceQrToken', urlToken); } catch (_) {}
 }
 const token = urlToken ||
-  sessionStorage.getItem('attendanceQrToken') ||
+  (() => { try { return sessionStorage.getItem('attendanceQrToken'); } catch (_) { return null; } })() ||
   (() => { try { return localStorage.getItem('attendanceQrToken'); } catch (_) { return null; } })();
 
 function clearToken() {
-  sessionStorage.removeItem('attendanceQrToken');
+  try { sessionStorage.removeItem('attendanceQrToken'); } catch (_) {}
   try { localStorage.removeItem('attendanceQrToken'); } catch (_) {}
 }
 
@@ -80,6 +82,7 @@ function showStatus(kind, heading, detail, { allowCheckout = false, allowSignIn 
   status.className = `status ${kind}`;
   status.textContent = kind === 'success' ? '✓' : kind === 'info' ? 'i' : kind === 'loading' ? '…' : '!';
   signInButton.classList.toggle('hidden', !allowSignIn);
+  browserHelp.classList.toggle('hidden', !allowSignIn);
   checkoutForm.classList.toggle('hidden', !allowCheckout);
   if (kind !== 'loading') {
     if (allowCheckout) checkoutCodeInput.focus();
@@ -96,9 +99,41 @@ function promptCheckoutCode(user) {
   status.textContent = '';
   announcement.textContent = '';
   signInButton.classList.add('hidden');
+  browserHelp.classList.add('hidden');
   checkoutForm.classList.remove('hidden');
   checkoutCodeInput.focus();
 }
+
+copyLinkButton.addEventListener('click', async () => {
+  const destination = new URL(window.location.href);
+  if (token && !leaveClassId) destination.searchParams.set('t', token);
+  const link = destination.href;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard-unavailable');
+    await navigator.clipboard.writeText(link);
+    copyLinkStatus.textContent = 'Đã sao chép. Hãy dán liên kết vào Chrome hoặc Safari.';
+  } catch (_) {
+    const input = document.createElement('textarea');
+    input.value = link;
+    input.setAttribute('readonly', '');
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.append(input);
+    let copied = false;
+    try {
+      input.select();
+      input.setSelectionRange(0, input.value.length);
+      copied = document.execCommand('copy');
+    } catch (_) {
+      // Show the link below so it can still be copied manually.
+    } finally {
+      input.remove();
+    }
+    copyLinkStatus.textContent = copied
+      ? 'Đã sao chép. Hãy dán liên kết vào Chrome hoặc Safari.'
+      : `Không thể sao chép tự động. Hãy dùng menu để mở bằng trình duyệt hoặc sao chép liên kết này: ${link}`;
+  }
+});
 
 function readableError(error, userEmail = '') {
   const msg = error?.message || String(error || '');
@@ -190,6 +225,13 @@ async function submitCheckIn(user, code) {
       clearToken();
       showStatus('error', 'QR đã hết hạn', readableError(error, user?.email));
       await signOut(auth).catch(() => undefined);
+      return;
+    }
+    if (errorMessage.includes('checkin-state-changed')) {
+      submitStarted = false;
+      showStatus('error', 'QR hoặc mã đã đổi', readableError(error, user?.email), {
+        allowCheckout: true,
+      });
       return;
     }
     showStatus('error', 'Không thể điểm danh', readableError(error, user?.email), {
@@ -326,23 +368,16 @@ async function bootstrap() {
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  await setPersistence(auth, browserLocalPersistence);
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+  } catch (error) {
+    console.warn('Local auth persistence unavailable; using memory:', error);
+    await setPersistence(auth, inMemoryPersistence);
+  }
 
   onAuthStateChanged(auth, (user) => {
     if (user) promptCheckoutCode(user);
   });
-
-  try {
-    const redirectResult = await getRedirectResult(auth);
-    if (redirectResult?.user) {
-      promptCheckoutCode(redirectResult.user);
-    }
-  } catch (error) {
-    console.error('getRedirectResult error:', error);
-    showStatus('error', 'Không thể hoàn tất đăng nhập', readableError(error), {
-      allowSignIn: true,
-    });
-  }
 
   checkoutForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -362,6 +397,8 @@ async function bootstrap() {
       submitStarted = false;
       checkoutCodeInput.value = '';
       setCodeError();
+      signInButton.disabled = false;
+      signInButton.textContent = 'Tiếp tục với Google';
       showStatus('info', 'Chọn tài khoản khác', 'Đăng nhập bằng email Google đã đăng ký trong danh sách lớp.', {
         allowSignIn: true,
       });
@@ -378,33 +415,36 @@ async function bootstrap() {
     signInButton.disabled = true;
     signInButton.textContent = 'Đang mở Google…';
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      try {
-        const result = await signInWithPopup(auth, provider);
-        if (result?.user) {
-          promptCheckoutCode(result.user);
-          return;
-        }
-      } catch (popupError) {
-        if (popupError?.code === 'auth/popup-blocked' || popupError?.code === 'auth/cancelled-popup-request') {
-          await signInWithRedirect(auth, provider);
-          return;
-        }
-        throw popupError;
-      }
+      const result = await signInWithGoogle(auth);
+      if (result?.user) promptCheckoutCode(result.user);
     } catch (error) {
       console.error(error);
       signInButton.disabled = false;
       signInButton.textContent = 'Tiếp tục với Google';
-      showStatus('error', 'Không mở được đăng nhập', 'Vui lòng thử đăng nhập lại.', {
+      if (auth.currentUser) {
+        promptCheckoutCode(auth.currentUser);
+        return;
+      }
+      showStatus('error', 'Không mở được đăng nhập', googleSignInError(error), {
         allowSignIn: true,
       });
+      browserHelp.classList.remove('hidden');
     }
   });
+  if (!auth.currentUser) {
+    signInButton.classList.remove('hidden');
+    browserHelp.classList.remove('hidden');
+  }
 }
 
-if (leaveClassId) {
+const browserProblem = signInBrowserProblem(navigator.userAgent, () => window.sessionStorage);
+if ((token || leaveClassId) && browserProblem) {
+  showStatus('info', 'Mở bằng Chrome hoặc Safari', browserProblem === 'embedded'
+    ? 'Bạn đang mở trang trong ứng dụng. Hãy dùng menu của ứng dụng để mở liên kết bằng trình duyệt, rồi đăng nhập Google.'
+    : 'Trình duyệt không lưu được phiên đăng nhập. Hãy mở liên kết trong Chrome hoặc Safari với bộ nhớ trang web được cho phép.');
+  browserHelp.classList.remove('hidden');
+  copyLinkButton.focus();
+} else if (leaveClassId) {
   import('./leave.js').then(({ startLeave }) => startLeave(firebaseConfig, leaveClassId)).catch((error) => {
     console.error(error);
     showStatus('error', 'Không thể mở trang xin nghỉ', 'Vui lòng thử lại hoặc liên hệ giảng viên.');

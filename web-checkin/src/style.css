@@ -104,6 +104,9 @@ h1 { margin: 0; font-size: 30px; line-height: 1.16; letter-spacing: -.025em; }
 .secondary-button { min-height: 42px; border: 0; color: #164e63; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
 .secondary-button:hover { text-decoration: underline; }
 .secondary-button:disabled { opacity: .6; cursor: wait; }
+.browser-help { margin-top: 12px; color: #60767d; font-size: 13px; line-height: 1.5; }
+.browser-help p { margin: 6px 0; }
+.browser-help #copy-link-status { min-height: 1em; overflow-wrap: anywhere; user-select: text; }
 
 .status {
   width: 72px;

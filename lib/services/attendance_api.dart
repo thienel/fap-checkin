@@ -1439,6 +1439,8 @@ class AttendanceApi {
         nextCode = _newCheckoutCode(excluding: checkoutData['code'] as String?);
         transaction.update(checkoutReference, {
           'code': nextCode,
+          'previousCode': checkoutData['code'],
+          'previousCodeGeneration': generation,
           'generation': generation + 1,
           'issuedAt': FieldValue.serverTimestamp(),
         });

@@ -86,14 +86,21 @@ service cloud.firestore {
         && attendance.checkoutCode.matches('^[A-Z0-9]{5}$')
         && checkout.ownerUid == session.ownerUid
         && checkout.sessionId == attendance.sessionId
-        && checkout.code == attendance.checkoutCode
         && checkout.rotationSeconds is int
         && checkout.rotationSeconds >= 10
         && checkout.rotationSeconds <= 3600
+        && checkout.generation is int
         && checkout.issuedAt is timestamp
-        && request.time <= checkout.issuedAt
-          + duration.value(checkout.rotationSeconds, 's')
-          + duration.value(3, 's')
+        && (
+          (checkout.code == attendance.checkoutCode
+            && request.time <= checkout.issuedAt
+              + duration.value(checkout.rotationSeconds, 's')
+              + duration.value(3, 's'))
+          || (checkout.get('previousCode', '') == attendance.checkoutCode
+            && checkout.get('previousCodeGeneration', 0)
+              == checkout.generation - 1
+            && request.time <= checkout.issuedAt + duration.value(10, 's'))
+        )
         && attendance.checkedInAt == request.time
         && attendance.createdAt == request.time
         && attendance.updatedAt == request.time
@@ -330,8 +337,8 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/courseClasses/$(request.resource.data.courseClassId)).data.academicTerm == request.resource.data.academicTerm;
     }
 
-    // The checkout code is private to teachers and the check-in callable.
-    // Students submit it to the callable, which validates it server-side.
+    // The checkout code is private to teachers. Students submit it with their
+    // attendance write, and validStudentCheckIn compares it server-side.
     match /attendanceCheckoutCodes/{sessionId} {
       allow get: if isTeacher()
         && (
@@ -365,13 +372,23 @@ service cloud.firestore {
         && request.resource.data.code.matches('^[A-Z0-9]{5}$')
         && request.resource.data.rotationSeconds == resource.data.rotationSeconds
         && request.resource.data.generation == resource.data.generation + 1
+        && (
+          (request.resource.data.get('previousCode', '') == resource.data.code
+            && request.resource.data.get('previousCodeGeneration', 0)
+              == resource.data.generation)
+          || (request.resource.data.get('previousCode', '')
+              == resource.data.get('previousCode', '')
+            && request.resource.data.get('previousCodeGeneration', 0)
+              == resource.data.get('previousCodeGeneration', 0))
+        )
         && request.resource.data.issuedAt == request.time
         && request.resource.data.keys().hasOnly([
           'ownerUid', 'sessionId', 'code', 'rotationSeconds',
-          'generation', 'issuedAt'
+          'generation', 'issuedAt', 'previousCode', 'previousCodeGeneration'
         ])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'code', 'generation', 'issuedAt'
+          'code', 'generation', 'issuedAt', 'previousCode',
+          'previousCodeGeneration'
         ]);
       allow delete: if isTeacher() && resource.data.ownerUid == request.auth.uid;
     }

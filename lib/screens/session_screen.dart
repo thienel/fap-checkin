@@ -113,7 +113,7 @@ class _SessionScreenState extends State<SessionScreen> {
       _checkoutSecondsLeftNotifier.value = _checkoutSecondsRemaining(
         _checkoutCodeIssuedAt,
       );
-      if (_checkoutSecondsLeftNotifier.value == 0 && _checkoutError == null) {
+      if (_checkoutSecondsLeftNotifier.value <= 5 && _checkoutError == null) {
         unawaited(_rotateCheckoutCode());
       }
     });

@@ -1,14 +1,16 @@
 import { initializeApp } from 'firebase/app';
 import {
-  browserSessionPersistence, getAuth, GoogleAuthProvider,
-  onAuthStateChanged, setPersistence, signInWithRedirect, signOut,
+  browserSessionPersistence, getAuth, inMemoryPersistence,
+  onAuthStateChanged, setPersistence, signOut,
 } from 'firebase/auth';
 import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from 'firebase/firestore';
+import { googleSignInError, signInWithGoogle } from './google_sign_in.js';
 
 const title = document.querySelector('#title');
 const message = document.querySelector('#message');
 const announcement = document.querySelector('#announcement');
 const signInButton = document.querySelector('#sign-in');
+const browserHelp = document.querySelector('#browser-help');
 const panel = document.querySelector('#leave-panel');
 const slotsElement = document.querySelector('#leave-slots');
 const historyElement = document.querySelector('#leave-history');
@@ -39,7 +41,12 @@ export async function startLeave(config, courseClassId) {
   const app = initializeApp(config);
   const auth = getAuth(app);
   const db = getFirestore(app);
-  await setPersistence(auth, browserSessionPersistence);
+  try {
+    await setPersistence(auth, browserSessionPersistence);
+  } catch (error) {
+    console.warn('Session auth persistence unavailable; using memory:', error);
+    await setPersistence(auth, inMemoryPersistence);
+  }
   let currentStudentId;
   let course;
   let requests = new Map();
@@ -95,6 +102,7 @@ export async function startLeave(config, courseClassId) {
     }
     document.querySelector('#leave-account').textContent = `${course.subject} · ${course.classCode} · ${email}`;
     signInButton.classList.add('hidden');
+    browserHelp.classList.add('hidden');
     panel.classList.remove('hidden');
     notice('Xin phép nghỉ', 'Chọn các buổi tương lai, nhập lý do và gửi đơn để giảng viên xem xét.');
   }
@@ -102,11 +110,10 @@ export async function startLeave(config, courseClassId) {
   signInButton.addEventListener('click', async () => {
     signInButton.disabled = true;
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      await signInWithRedirect(auth, provider);
+      await signInWithGoogle(auth);
     } catch (error) {
-      notice('Không thể đăng nhập', error.message);
+      notice('Không thể đăng nhập', googleSignInError(error));
+      browserHelp.classList.remove('hidden');
       signInButton.disabled = false;
     }
   });
@@ -167,6 +174,7 @@ export async function startLeave(config, courseClassId) {
     if (!user) {
       signInButton.disabled = false;
       signInButton.classList.remove('hidden');
+      browserHelp.classList.remove('hidden');
       notice('Xin phép nghỉ', 'Đăng nhập bằng email Google đã đăng ký trong lớp để gửi và theo dõi đơn.');
       return;
     }
