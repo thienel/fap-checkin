@@ -394,7 +394,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final canReceive =
         daySlot != null &&
         targetDate.compareTo(today) > 0 &&
-        date.weekday != DateTime.sunday &&
         !_movingScheduleSlot;
     return DragTarget<TodaySlot>(
       onWillAcceptWithDetails: (details) {

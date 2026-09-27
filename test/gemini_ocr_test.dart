@@ -112,6 +112,13 @@ void main() {
     expect(item.date, DateTime(2025, 10, 25));
   });
 
+  test('timetable OCR accepts a Sunday class date', () {
+    const raw =
+        '[{"subject":"PRM393","classCode":"SE1801","date":"2026-09-20","weekday":7,"daySlot":2,"sessionNumber":1,"totalSessions":20}]';
+    final item = GeminiOcrService.parseTimetableJson(raw).single;
+    expect(item.date, DateTime(2026, 9, 20));
+  });
+
   test('timetable OCR resolves a date without year near the current term', () {
     const raw =
         '[{"subject":"PRM393","classCode":"SE1801","date":"25/10","daySlot":2}]';

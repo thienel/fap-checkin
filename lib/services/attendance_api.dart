@@ -1059,10 +1059,6 @@ class AttendanceApi {
         'Chỉ có thể chuyển slot sang ngày mai hoặc ngày trong tương lai.',
       );
     }
-    if (normalizedTarget.weekday == DateTime.sunday) {
-      throw const AttendanceApiException('Không thể xếp lịch vào Chủ nhật.');
-    }
-
     final coursesReference = _firestore.collection('courseClasses');
     final courseReference = coursesReference.doc(courseClassId);
 

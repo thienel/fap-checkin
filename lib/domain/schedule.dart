@@ -122,15 +122,12 @@ List<ScheduledSlot> generateSchedule({
   required SchedulePreset preset,
 }) {
   final normalized = DateTime(startDate.year, startDate.month, startDate.day);
-  if (normalized.weekday == DateTime.sunday) {
-    throw ArgumentError.value(startDate, 'startDate', 'Không được là Chủ nhật');
-  }
   if (preset == SchedulePreset.thirtySlotsThreeWeeks &&
       normalized.weekday == DateTime.saturday) {
     throw ArgumentError.value(
       startDate,
       'startDate',
-      'Block 3 tuần bắt đầu từ Thứ 2–6',
+      'Block 3 tuần không bắt đầu vào Thứ Bảy',
     );
   }
 
@@ -142,12 +139,12 @@ List<ScheduledSlot> generateSchedule({
 
     current = switch (preset) {
       SchedulePreset.thirtySlotsThreeWeeks =>
-        index.isEven ? current : _addWeekdays(current, 1),
-      SchedulePreset.twentySlotsTenWeeks ||
-      SchedulePreset.tenSlotsFiveWeeks => _addTeachingDays(current, 3),
+        index.isEven ? current : _addBlockDays(current, 1),
+      SchedulePreset.twentySlotsTenWeeks || SchedulePreset.tenSlotsFiveWeeks =>
+        current.add(Duration(days: index.isEven ? 3 : 4)),
       SchedulePreset.tenSlotsTenWeeks => current.add(const Duration(days: 7)),
       SchedulePreset.twentySlotsThreeWeeks ||
-      SchedulePreset.tenSlotsThreeWeeks => _addTeachingDays(current, 1),
+      SchedulePreset.tenSlotsThreeWeeks => current.add(const Duration(days: 1)),
     };
   }
   return result;
@@ -167,32 +164,27 @@ DateTime inferScheduleStartDate({
     observedDate.month,
     observedDate.day,
   );
-  if (current.weekday == DateTime.sunday) {
-    throw ArgumentError.value(
-      observedDate,
-      'observedDate',
-      'Không được là Chủ nhật',
-    );
-  }
   if (preset == SchedulePreset.thirtySlotsThreeWeeks &&
       current.weekday == DateTime.saturday) {
     throw ArgumentError.value(
       observedDate,
       'observedDate',
-      'Block 3 tuần học Thứ 2–6',
+      'Block 3 tuần không học Thứ Bảy',
     );
   }
   for (var index = 1; index < sessionNumber; index++) {
     current = switch (preset) {
       SchedulePreset.thirtySlotsThreeWeeks =>
-        index.isOdd ? current : _subtractWeekdays(current, 1),
-      SchedulePreset.twentySlotsTenWeeks ||
-      SchedulePreset.tenSlotsFiveWeeks => _subtractTeachingDays(current, 3),
+        index.isOdd ? current : _subtractBlockDays(current, 1),
+      SchedulePreset.twentySlotsTenWeeks || SchedulePreset.tenSlotsFiveWeeks =>
+        current.subtract(Duration(days: index.isOdd ? 3 : 4)),
       SchedulePreset.tenSlotsTenWeeks => current.subtract(
         const Duration(days: 7),
       ),
       SchedulePreset.twentySlotsThreeWeeks ||
-      SchedulePreset.tenSlotsThreeWeeks => _subtractTeachingDays(current, 1),
+      SchedulePreset.tenSlotsThreeWeeks => current.subtract(
+        const Duration(days: 1),
+      ),
     };
   }
   return current;
@@ -209,9 +201,8 @@ DateTime? suggestScheduleStartDateFromObserved({
     observedDate.month,
     observedDate.day,
   );
-  if (observed.weekday == DateTime.sunday ||
-      (preset == SchedulePreset.thirtySlotsThreeWeeks &&
-          observed.weekday == DateTime.saturday)) {
+  if (preset == SchedulePreset.thirtySlotsThreeWeeks &&
+      observed.weekday == DateTime.saturday) {
     return null;
   }
   final firstDay = academicTermStart(observed);
@@ -222,9 +213,8 @@ DateTime? suggestScheduleStartDateFromObserved({
     !candidate.isAfter(observed);
     candidate = candidate.add(const Duration(days: 1))
   ) {
-    if (candidate.weekday == DateTime.sunday ||
-        (preset == SchedulePreset.thirtySlotsThreeWeeks &&
-            candidate.weekday == DateTime.saturday)) {
+    if (preset == SchedulePreset.thirtySlotsThreeWeeks &&
+        candidate.weekday == DateTime.saturday) {
       continue;
     }
     final schedule = generateSchedule(startDate: candidate, preset: preset);
@@ -235,42 +225,22 @@ DateTime? suggestScheduleStartDateFromObserved({
   return fallback;
 }
 
-DateTime _addTeachingDays(DateTime date, int count) {
+DateTime _addBlockDays(DateTime date, int count) {
   var cursor = date;
   var remaining = count;
   while (remaining > 0) {
     cursor = cursor.add(const Duration(days: 1));
-    if (cursor.weekday != DateTime.sunday) remaining--;
+    if (cursor.weekday != DateTime.saturday) remaining--;
   }
   return cursor;
 }
 
-DateTime _subtractTeachingDays(DateTime date, int count) {
+DateTime _subtractBlockDays(DateTime date, int count) {
   var cursor = date;
   var remaining = count;
   while (remaining > 0) {
     cursor = cursor.subtract(const Duration(days: 1));
-    if (cursor.weekday != DateTime.sunday) remaining--;
-  }
-  return cursor;
-}
-
-DateTime _addWeekdays(DateTime date, int count) {
-  var cursor = date;
-  var remaining = count;
-  while (remaining > 0) {
-    cursor = cursor.add(const Duration(days: 1));
-    if (cursor.weekday <= DateTime.friday) remaining--;
-  }
-  return cursor;
-}
-
-DateTime _subtractWeekdays(DateTime date, int count) {
-  var cursor = date;
-  var remaining = count;
-  while (remaining > 0) {
-    cursor = cursor.subtract(const Duration(days: 1));
-    if (cursor.weekday <= DateTime.friday) remaining--;
+    if (cursor.weekday != DateTime.saturday) remaining--;
   }
   return cursor;
 }

@@ -42,9 +42,6 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   @override
   void initState() {
     super.initState();
-    if (_startDate!.weekday == DateTime.sunday) {
-      _startDate = _startDate!.add(const Duration(days: 1));
-    }
     _autofilledTerm = academicTermForDate(_startDate!);
     _termController.text = _autofilledTerm!;
   }
@@ -60,9 +57,6 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
 
   Future<void> _pickDate() async {
     var initialDate = _startDate ?? DateTime.now();
-    if (initialDate.weekday == DateTime.sunday) {
-      initialDate = initialDate.add(const Duration(days: 1));
-    }
     if (_preset == SchedulePreset.thirtySlotsThreeWeeks &&
         initialDate.weekday == DateTime.saturday) {
       initialDate = initialDate.add(const Duration(days: 2));
@@ -79,9 +73,8 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
       lastDate: DateTime(2100, 12, 31),
       initialDate: initialDate,
       selectableDayPredicate: (date) =>
-          date.weekday != DateTime.sunday &&
-          (_preset != SchedulePreset.thirtySlotsThreeWeeks ||
-              date.weekday != DateTime.saturday),
+          _preset != SchedulePreset.thirtySlotsThreeWeeks ||
+          date.weekday != DateTime.saturday,
     );
     if (selected != null) {
       setState(() {
@@ -610,7 +603,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                         ),
                         Text(
                           _preset == SchedulePreset.thirtySlotsThreeWeeks
-                              ? '${preview.length} buổi · 2 slot/ngày Thứ 2–6 · ${_daySlot == null ? 'Chưa chọn slot' : 'Slot $_daySlot–${_daySlot! + 1}'}'
+                              ? '${preview.length} buổi · 2 slot/ngày trừ Thứ Bảy · ${_daySlot == null ? 'Chưa chọn slot' : 'Slot $_daySlot–${_daySlot! + 1}'}'
                               : '${preview.length} buổi · ${_daySlot == null ? 'Chưa chọn slot' : 'Slot $_daySlot'}',
                           style: const TextStyle(color: AppColors.textMuted),
                         ),

@@ -485,10 +485,7 @@ Quy tắc bắt buộc:
       return null;
     }
     final date = DateTime(year, month, day);
-    return date.year == year &&
-            date.month == month &&
-            date.day == day &&
-            date.weekday != DateTime.sunday
+    return date.year == year && date.month == month && date.day == day
         ? date
         : null;
   }

@@ -30,7 +30,7 @@ void main() {
         observedDate: DateTime(2025, 10, 24),
         preset: SchedulePreset.thirtySlotsThreeWeeks,
       ),
-      DateTime(2025, 10, 6),
+      DateTime(2025, 10, 8),
     );
   });
 
@@ -47,7 +47,7 @@ void main() {
     );
   });
 
-  test('lịch hai buổi một tuần bỏ qua Chủ nhật', () {
+  test('lịch hai buổi một tuần giữ hai thứ cố định', () {
     final slots = generateSchedule(
       startDate: DateTime(2026, 9, 17), // Thứ Năm
       preset: SchedulePreset.tenSlotsFiveWeeks,
@@ -55,13 +55,13 @@ void main() {
 
     expect(slots.take(4).map((slot) => _date(slot.date)), [
       '2026-09-17',
-      '2026-09-21',
+      '2026-09-20',
       '2026-09-24',
-      '2026-09-28',
+      '2026-09-27',
     ]);
   });
 
-  test('block 3 tuần tạo 30 slot theo cặp trong 15 ngày Thứ 2–6', () {
+  test('block 3 tuần tạo 30 slot theo cặp trong 15 ngày trừ Thứ Bảy', () {
     final slots = generateSchedule(
       startDate: DateTime(2026, 9, 28),
       preset: SchedulePreset.thirtySlotsThreeWeeks,
@@ -70,8 +70,8 @@ void main() {
     expect(_date(slots[0].date), '2026-09-28');
     expect(_date(slots[1].date), '2026-09-28');
     expect(_date(slots[9].date), '2026-10-02');
-    expect(_date(slots[10].date), '2026-10-05');
-    expect(_date(slots[29].date), '2026-10-16');
+    expect(_date(slots[10].date), '2026-10-04');
+    expect(_date(slots[29].date), '2026-10-14');
     expect(
       slots
           .map(
@@ -124,24 +124,38 @@ void main() {
     expect(_date(slots[9].date), '2026-11-18');
   });
 
-  test('lịch cấp tốc đi qua mọi ngày trừ Chủ nhật', () {
+  test('lịch cấp tốc đi qua Chủ nhật', () {
     final slots = generateSchedule(
       startDate: DateTime(2026, 9, 19), // Thứ Bảy
       preset: SchedulePreset.tenSlotsThreeWeeks,
     );
 
-    expect(_date(slots[1].date), '2026-09-21');
-    expect(slots.every((slot) => slot.date.weekday != DateTime.sunday), isTrue);
+    expect(_date(slots[1].date), '2026-09-20');
+    expect(slots.any((slot) => slot.date.weekday == DateTime.sunday), isTrue);
   });
 
-  test('từ chối ngày bắt đầu là Chủ nhật', () {
-    expect(
-      () => generateSchedule(
-        startDate: DateTime(2026, 9, 20),
-        preset: SchedulePreset.twentySlotsThreeWeeks,
-      ),
-      throwsArgumentError,
-    );
+  test('mọi nhịp học có thể bắt đầu và tiếp tục vào Chủ nhật', () {
+    final sunday = DateTime(2026, 9, 20);
+    for (final preset in SchedulePreset.values) {
+      final slots = generateSchedule(startDate: sunday, preset: preset);
+      expect(slots.first.date, sunday, reason: preset.label);
+      expect(
+        slots.skip(1).any((slot) => slot.date.weekday == DateTime.sunday),
+        isTrue,
+        reason: preset.label,
+      );
+      for (final slot in slots) {
+        expect(
+          inferScheduleStartDate(
+            observedDate: slot.date,
+            sessionNumber: slot.number,
+            preset: preset,
+          ),
+          sunday,
+          reason: '${preset.label} · buổi ${slot.number}',
+        );
+      }
+    }
   });
 
   test('xác định tuần từ thứ Hai đến Chủ nhật', () {
