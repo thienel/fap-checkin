@@ -219,6 +219,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       (index) => _weekStart.add(Duration(days: index)),
     );
     final includeUnassigned = slots.any((slot) => slot.daySlot == null);
+    final hasShortBlock = slots.any((slot) => slot.slotCount == 30);
     final rowSlots = <int?>[
       ...daySlotDefinitions.map((slot) => slot.number),
       if (includeUnassigned) null,
@@ -277,7 +278,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             : Colors.white,
                       ),
                       children: [
-                        _daySlotCell(daySlot),
+                        _daySlotCell(daySlot, showStandardTime: !hasShortBlock),
                         for (final date in dates)
                           _weekScheduleCell(
                             slots
@@ -330,7 +331,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _daySlotCell(int? daySlot) {
+  Widget _daySlotCell(int? daySlot, {bool showStandardTime = true}) {
     final definition = daySlot == null
         ? null
         : daySlotDefinitions.firstWhere((item) => item.number == daySlot);
@@ -345,7 +346,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             daySlot == null ? 'Chưa xếp slot' : 'Slot $daySlot',
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
-          if (definition?.timeRange != null) ...[
+          if (showStandardTime && definition?.timeRange != null) ...[
             const SizedBox(height: 4),
             Text(
               definition!.timeRange!,

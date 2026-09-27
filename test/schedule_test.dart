@@ -3,6 +3,50 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fap_check_attendance/domain/schedule.dart';
 
 void main() {
+  test('suy học kỳ từ ngày trong ảnh', () {
+    expect(academicTermForDate(DateTime(2026, 1, 1)), '2026-SPRING');
+    expect(academicTermForDate(DateTime(2026, 4, 30)), '2026-SPRING');
+    expect(academicTermForDate(DateTime(2026, 5, 1)), '2026-SUMMER');
+    expect(academicTermForDate(DateTime(2026, 8, 31)), '2026-SUMMER');
+    expect(academicTermForDate(DateTime(2026, 9, 1)), '2026-FALL');
+    expect(academicTermForDate(DateTime(2026, 12, 31)), '2026-FALL');
+  });
+
+  test('ngày 25/10 gợi ý ngày bắt đầu trong kỳ Fall khi thiếu số buổi', () {
+    final observed = DateTime(2025, 10, 25);
+    expect(academicTermForDate(observed), '2025-FALL');
+    expect(
+      suggestScheduleStartDateFromObserved(
+        observedDate: observed,
+        preset: SchedulePreset.twentySlotsTenWeeks,
+      ),
+      DateTime(2025, 9, 3),
+    );
+  });
+
+  test('block 3 tuần gợi ý đầu block từ một ngày học tháng 10', () {
+    expect(
+      suggestScheduleStartDateFromObserved(
+        observedDate: DateTime(2025, 10, 24),
+        preset: SchedulePreset.thirtySlotsThreeWeeks,
+      ),
+      DateTime(2025, 10, 6),
+    );
+  });
+
+  test('hai loại block chính đều có 45 giờ học', () {
+    expect(
+      SchedulePreset.twentySlotsTenWeeks.slotCount *
+          SchedulePreset.twentySlotsTenWeeks.slotDurationMinutes,
+      45 * 60,
+    );
+    expect(
+      SchedulePreset.thirtySlotsThreeWeeks.slotCount *
+          SchedulePreset.thirtySlotsThreeWeeks.slotDurationMinutes,
+      45 * 60,
+    );
+  });
+
   group('lịch debug PRM393', () {
     test('tạo đủ 5 slot có thể kiểm thử trong cùng ngày', () {
       final slots = generateDebugDaySchedule(DateTime(2026, 9, 20, 16, 30));
@@ -57,6 +101,40 @@ void main() {
       '2026-09-24',
       '2026-09-28',
     ]);
+  });
+
+  test('block 3 tuần tạo 30 slot theo cặp trong 15 ngày Thứ 2–6', () {
+    final slots = generateSchedule(
+      startDate: DateTime(2026, 9, 28),
+      preset: SchedulePreset.thirtySlotsThreeWeeks,
+    );
+    expect(slots, hasLength(30));
+    expect(_date(slots[0].date), '2026-09-28');
+    expect(_date(slots[1].date), '2026-09-28');
+    expect(_date(slots[9].date), '2026-10-02');
+    expect(_date(slots[10].date), '2026-10-05');
+    expect(_date(slots[29].date), '2026-10-16');
+    expect(
+      slots
+          .map(
+            (slot) =>
+                '${_date(slot.date)}-${daySlotForScheduledSlot(preset: SchedulePreset.thirtySlotsThreeWeeks, firstDaySlot: 3, sessionNumber: slot.number)}',
+          )
+          .toSet(),
+      hasLength(30),
+    );
+    expect(
+      slots
+          .take(4)
+          .map(
+            (slot) => daySlotForScheduledSlot(
+              preset: SchedulePreset.thirtySlotsThreeWeeks,
+              firstDaySlot: 3,
+              sessionNumber: slot.number,
+            ),
+          ),
+      [3, 4, 3, 4],
+    );
   });
 
   test('suy ra ngày buổi 1 từ ngày một buổi trong ảnh cho mọi nhịp học', () {

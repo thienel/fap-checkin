@@ -37,6 +37,7 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   List<OcrTimetableItem> _ocrItems = [];
   int? _selectedOcrIndex;
   String? _error;
+  String? _autofilledTerm;
 
   @override
   void initState() {
@@ -44,7 +45,8 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
     if (_startDate!.weekday == DateTime.sunday) {
       _startDate = _startDate!.add(const Duration(days: 1));
     }
-    _termController.text = _suggestedTerm(_startDate!);
+    _autofilledTerm = academicTermForDate(_startDate!);
+    _termController.text = _autofilledTerm!;
   }
 
   @override
@@ -61,6 +63,10 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
     if (initialDate.weekday == DateTime.sunday) {
       initialDate = initialDate.add(const Duration(days: 1));
     }
+    if (_preset == SchedulePreset.thirtySlotsThreeWeeks &&
+        initialDate.weekday == DateTime.saturday) {
+      initialDate = initialDate.add(const Duration(days: 2));
+    }
     if (initialDate.isBefore(DateTime(2020))) {
       initialDate = DateTime(2020, 1, 1);
     }
@@ -72,28 +78,23 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
       firstDate: DateTime(2020),
       lastDate: DateTime(2100, 12, 31),
       initialDate: initialDate,
-      selectableDayPredicate: (date) => date.weekday != DateTime.sunday,
+      selectableDayPredicate: (date) =>
+          date.weekday != DateTime.sunday &&
+          (_preset != SchedulePreset.thirtySlotsThreeWeeks ||
+              date.weekday != DateTime.saturday),
     );
     if (selected != null) {
       setState(() {
         final usedSuggestion =
-            _startDate == null ||
-            _termController.text == _suggestedTerm(_startDate!);
+            _termController.text.isEmpty ||
+            _termController.text == _autofilledTerm;
         _startDate = selected;
-        if (usedSuggestion) _termController.text = _suggestedTerm(selected);
+        _autofilledTerm = academicTermForDate(selected);
+        if (usedSuggestion) _termController.text = _autofilledTerm!;
         _dateManuallyEdited = true;
         _error = null;
       });
     }
-  }
-
-  String _suggestedTerm(DateTime date) {
-    final season = date.month <= 4
-        ? 'SPRING'
-        : date.month <= 8
-        ? 'SUMMER'
-        : 'FALL';
-    return '${date.year}-$season';
   }
 
   Future<void> _submit() async {
@@ -149,15 +150,30 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
     _subjectController.text = item.subject;
     _classController.text = item.classCode;
     _preset = switch (item.totalSessions) {
-      10 => SchedulePreset.tenSlotsFiveWeeks,
+      10 => SchedulePreset.tenSlotsTenWeeks,
       20 => SchedulePreset.twentySlotsTenWeeks,
-      _ => null,
+      30 => SchedulePreset.thirtySlotsThreeWeeks,
+      _ => SchedulePreset.twentySlotsTenWeeks,
     };
     _startDate = _suggestedStartDate(item, _preset);
-    _termController.text = _startDate == null
-        ? ''
-        : _suggestedTerm(_startDate!);
-    _daySlot = item.daySlot;
+    _autofilledTerm = item.date == null
+        ? null
+        : academicTermForDate(item.date!);
+    _termController.text = _autofilledTerm ?? '';
+    final suggestedSlot = item.daySlot;
+    _daySlot =
+        _preset == SchedulePreset.thirtySlotsThreeWeeks &&
+            suggestedSlot != null &&
+            item.sessionNumber != null &&
+            item.sessionNumber!.isEven
+        ? suggestedSlot - 1
+        : suggestedSlot;
+    if (_daySlot != null &&
+        (_daySlot! < 1 ||
+            (_preset == SchedulePreset.thirtySlotsThreeWeeks &&
+                _daySlot! > 6))) {
+      _daySlot = null;
+    }
     _attemptedSubmit = false;
     _dateManuallyEdited = false;
     _selectionVersion++;
@@ -167,19 +183,33 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
   DateTime? _suggestedStartDate(OcrTimetableItem item, SchedulePreset? preset) {
     final observedDate = item.date;
     if (observedDate == null) return null;
+    if (preset == SchedulePreset.thirtySlotsThreeWeeks &&
+        observedDate.weekday == DateTime.saturday) {
+      return null;
+    }
+    if (preset == null) return observedDate;
     final sessionNumber = item.sessionNumber;
-    if (preset == null ||
-        sessionNumber == null ||
+    if (sessionNumber == null ||
         sessionNumber < 1 ||
         sessionNumber > preset.slotCount) {
-      return observedDate;
+      return suggestScheduleStartDateFromObserved(
+            observedDate: observedDate,
+            preset: preset,
+          ) ??
+          observedDate;
     }
     final inferred = inferScheduleStartDate(
       observedDate: observedDate,
       sessionNumber: sessionNumber,
       preset: preset,
     );
-    return inferred.isBefore(DateTime(2020)) ? observedDate : inferred;
+    return inferred.isBefore(DateTime(2020))
+        ? (suggestScheduleStartDateFromObserved(
+                observedDate: observedDate,
+                preset: preset,
+              ) ??
+              observedDate)
+        : inferred;
   }
 
   Future<void> _scanTimetable() async {
@@ -266,7 +296,11 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final preview = _startDate != null && _preset != null
+    final validStartDate =
+        _startDate != null &&
+        !(_preset == SchedulePreset.thirtySlotsThreeWeeks &&
+            _startDate!.weekday == DateTime.saturday);
+    final preview = validStartDate && _preset != null
         ? generateSchedule(startDate: _startDate!, preset: _preset!)
         : null;
     return AlertDialog(
@@ -446,20 +480,20 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                               ? 'Chọn lịch học'
                               : null,
                         ),
-                        items: SchedulePreset.values
-                            .map(
-                              (preset) => DropdownMenuItem(
-                                value: preset,
-                                child: Text(preset.label),
-                              ),
-                            )
-                            .toList(),
+                        items:
+                            const [
+                                  SchedulePreset.twentySlotsTenWeeks,
+                                  SchedulePreset.thirtySlotsThreeWeeks,
+                                  SchedulePreset.tenSlotsTenWeeks,
+                                ]
+                                .map(
+                                  (preset) => DropdownMenuItem(
+                                    value: preset,
+                                    child: Text(preset.label),
+                                  ),
+                                )
+                                .toList(),
                         onChanged: (value) => setState(() {
-                          final previousDate = _startDate;
-                          final usedSuggestion =
-                              previousDate == null ||
-                              _termController.text ==
-                                  _suggestedTerm(previousDate);
                           _preset = value;
                           if (!_dateManuallyEdited &&
                               _selectedOcrIndex != null) {
@@ -467,12 +501,17 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                               _ocrItems[_selectedOcrIndex!],
                               value,
                             );
-                            if (usedSuggestion) {
-                              _termController.text = _startDate == null
-                                  ? ''
-                                  : _suggestedTerm(_startDate!);
-                            }
+                          } else if (value ==
+                                  SchedulePreset.thirtySlotsThreeWeeks &&
+                              _startDate?.weekday == DateTime.saturday) {
+                            _startDate = null;
                           }
+                          if (value == SchedulePreset.thirtySlotsThreeWeeks &&
+                              _daySlot != null &&
+                              _daySlot! > 6) {
+                            _daySlot = null;
+                          }
+                          _selectionVersion++;
                           _error = null;
                         }),
                       ),
@@ -484,17 +523,28 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                   key: ValueKey('slot-$_selectionVersion'),
                   initialValue: _daySlot,
                   decoration: InputDecoration(
-                    labelText: 'Giờ học (slot)',
+                    labelText: _preset == SchedulePreset.thirtySlotsThreeWeeks
+                        ? 'Slot bắt đầu mỗi ngày'
+                        : 'Giờ học (slot)',
                     hintText: 'Chọn slot',
                     errorText: _attemptedSubmit && _daySlot == null
                         ? 'Chọn slot trong ngày'
                         : null,
                   ),
                   items: daySlotDefinitions
+                      .where(
+                        (slot) =>
+                            _preset != SchedulePreset.thirtySlotsThreeWeeks ||
+                            slot.number <= 6,
+                      )
                       .map(
                         (slot) => DropdownMenuItem(
                           value: slot.number,
-                          child: Text(slot.label),
+                          child: Text(
+                            _preset == SchedulePreset.thirtySlotsThreeWeeks
+                                ? 'Slot ${slot.number}'
+                                : slot.label,
+                          ),
                         ),
                       )
                       .toList(),
@@ -528,9 +578,17 @@ class _CreateCourseDialogState extends State<CreateCourseDialog> {
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         Text(
-                          '${preview.length} buổi · ${_daySlot == null ? 'Chưa chọn slot' : 'Slot $_daySlot'}',
+                          _preset == SchedulePreset.thirtySlotsThreeWeeks
+                              ? '${preview.length} buổi · 2 slot/ngày Thứ 2–6 · ${_daySlot == null ? 'Chưa chọn slot' : 'Slot $_daySlot–${_daySlot! + 1}'}'
+                              : '${preview.length} buổi · ${_daySlot == null ? 'Chưa chọn slot' : 'Slot $_daySlot'}',
                           style: const TextStyle(color: AppColors.textMuted),
                         ),
+                        if (_preset == SchedulePreset.thirtySlotsThreeWeeks ||
+                            _preset == SchedulePreset.twentySlotsTenWeeks)
+                          const Text(
+                            'Tổng 45 giờ học',
+                            style: TextStyle(color: AppColors.textMuted),
+                          ),
                       ],
                     ),
                   ),

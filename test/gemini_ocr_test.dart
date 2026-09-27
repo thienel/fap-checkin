@@ -65,6 +65,63 @@ void main() {
     },
   );
 
+  test('timetable OCR reads the 30-session block count', () {
+    const raw =
+        '[{"subject":"PRM393","classCode":"SE1801","date":"2026-09-28","daySlot":2,"sessionNumber":3,"totalSessions":30}]';
+    final item = GeminiOcrService.parseTimetableJson(raw).single;
+    expect(item.totalSessions, 30);
+    expect(item.sessionNumber, 3);
+  });
+
+  test(
+    'timetable OCR retains the visible date and block count across cells',
+    () {
+      const raw = '''
+[
+  {"subject":"PRM393","classCode":"SE1801","date":null,"daySlot":1,"sessionNumber":1,"totalSessions":null},
+  {"subject":"PRM393","classCode":"SE1801","date":"2026-09-29","daySlot":2,"sessionNumber":3,"totalSessions":30}
+]
+''';
+      final item = GeminiOcrService.parseTimetableJson(raw).single;
+      expect(item.date, DateTime(2026, 9, 29));
+      expect(item.sessionNumber, 3);
+      expect(item.totalSessions, 30);
+    },
+  );
+
+  test('timetable OCR fills a missing total from a later session', () {
+    const raw = '''
+[
+  {"subject":"PRM393","classCode":"SE1801","date":"2026-09-28","daySlot":1,"sessionNumber":1,"totalSessions":null},
+  {"subject":"PRM393","classCode":"SE1801","date":"2026-09-29","daySlot":2,"sessionNumber":3,"totalSessions":30}
+]
+''';
+    final item = GeminiOcrService.parseTimetableJson(raw).single;
+    expect(item.sessionNumber, 1);
+    expect(item.date, DateTime(2026, 9, 28));
+    expect(item.totalSessions, 30);
+  });
+
+  test('timetable OCR resolves 25/10 using the visible weekday', () {
+    const raw =
+        '[{"subject":"PRM393","classCode":"SE1801","date":"25/10","weekday":6,"daySlot":2,"totalSessions":20}]';
+    final item = GeminiOcrService.parseTimetableJson(
+      raw,
+      referenceDate: DateTime(2026, 9, 27),
+    ).single;
+    expect(item.date, DateTime(2025, 10, 25));
+  });
+
+  test('timetable OCR resolves a date without year near the current term', () {
+    const raw =
+        '[{"subject":"PRM393","classCode":"SE1801","date":"25/10","daySlot":2}]';
+    final item = GeminiOcrService.parseTimetableJson(
+      raw,
+      referenceDate: DateTime(2025, 9, 27),
+    ).single;
+    expect(item.date, DateTime(2025, 10, 25));
+  });
+
   group('GeminiOcrService JSON parsing', () {
     test('parses pure JSON array with fpt.edu.vn and gmail.com emails', () {
       const raw = '''

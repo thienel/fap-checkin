@@ -866,7 +866,20 @@ class AttendanceApi {
     final normalizedClass = _requiredCode(classCode, 'Mã lớp');
     final normalizedTerm = _requiredCode(academicTerm, 'Học kỳ');
     _validateDaySlot(daySlot);
+    if (preset == SchedulePreset.thirtySlotsThreeWeeks && daySlot == 7) {
+      throw const AttendanceApiException(
+        'Block 30 slot cần hai slot liên tiếp mỗi ngày. Chọn slot bắt đầu từ 1 đến 6.',
+      );
+    }
     final schedule = generateSchedule(startDate: startDate, preset: preset);
+    final scheduledDaySlots = [
+      for (final item in schedule)
+        daySlotForScheduledSlot(
+          preset: preset,
+          firstDaySlot: daySlot,
+          sessionNumber: item.number,
+        ),
+    ];
     final reference = _firestore.collection('courseClasses').doc();
     final id = reference.id;
     final claimReference = _firestore
@@ -877,7 +890,8 @@ class AttendanceApi {
     // Lock ID: {ownerUid}_{date}_{daySlot} để prevent concurrent creation
     // của hai lớp chiếm cùng khung giờ của cùng giảng viên.
     final lockIds = [
-      for (final item in schedule) '${uid}_${_isoDate(item.date)}_$daySlot',
+      for (var index = 0; index < schedule.length; index++)
+        '${uid}_${_isoDate(schedule[index].date)}_${scheduledDaySlots[index]}',
     ];
     final lockRefs = [
       for (final lockId in lockIds)
@@ -885,7 +899,7 @@ class AttendanceApi {
     ];
 
     // Firestore transaction limit: 500 reads + writes.
-    // Với preset lớn nhất (20 slots): 20 lock reads + 1 course read + 20 lock writes + 1 course write = 42 ops.
+    // Preset lớn nhất có 30 slot: 30 lock reads + 1 course read + 30 lock writes + 1 course write.
     // Luôn trong giới hạn, nhưng validate phòng ngừa.
     if (lockRefs.length > 400) {
       throw const AttendanceApiException(
@@ -931,15 +945,15 @@ class AttendanceApi {
         'startDate': _isoDate(startDate),
         'slotCount': preset.slotCount,
         'weekLabel': preset.weekLabel,
-        'schedule': schedule
-            .map(
-              (item) => {
-                'number': item.number,
-                'date': _isoDate(item.date),
-                'daySlot': daySlot,
-              },
-            )
-            .toList(),
+        'slotDurationMinutes': preset.slotDurationMinutes,
+        'schedule': [
+          for (var index = 0; index < schedule.length; index++)
+            {
+              'number': schedule[index].number,
+              'date': _isoDate(schedule[index].date),
+              'daySlot': scheduledDaySlots[index],
+            },
+        ],
         'ownerUid': uid,
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -958,7 +972,7 @@ class AttendanceApi {
         transaction.set(lockRefs[i], {
           'ownerUid': uid,
           'date': _isoDate(item.date),
-          'daySlot': daySlot,
+          'daySlot': scheduledDaySlots[i],
           'courseClassId': id,
           'subject': normalizedSubject,
           'classCode': normalizedClass,
@@ -2463,9 +2477,10 @@ class AttendanceApi {
     'unavailable' => 'Không thể kết nối Firebase. Hãy kiểm tra mạng.',
     'failed-precondition' =>
       'Firestore cần một index. Hãy deploy firestore.indexes.json.',
-    _ => (error.message != null && error.message!.trim().isNotEmpty)
-        ? error.message!
-        : 'Yêu cầu Firebase thất bại [mã lỗi: ${error.code}].',
+    _ =>
+      (error.message != null && error.message!.trim().isNotEmpty)
+          ? error.message!
+          : 'Yêu cầu Firebase thất bại [mã lỗi: ${error.code}].',
   };
 
   String _isoDate(DateTime value) =>

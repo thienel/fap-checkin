@@ -156,8 +156,8 @@ class GeminiOcrService {
 Đọc ảnh chụp màn hình "Lịch trong tuần" của ứng dụng điểm danh.
 Mỗi ô có thể chứa mã môn, mã lớp, "Buổi x/y". Cột cho biết ngày (thứ/ngày/tháng), hàng cho biết Slot 1–7.
 Trả về JSON array, mỗi ô môn học một object:
-[{"subject":"PRM393","classCode":"SE1801","date":"2026-09-28","daySlot":2,"sessionNumber":1,"totalSessions":20}]
-Chỉ chép dữ liệu nhìn thấy. Nếu năm không hiện rõ, date phải là null. Nếu không thấy slot, số buổi hoặc tổng buổi, đặt trường tương ứng null. Không đoán ngày bắt đầu khóa học, học kỳ hay các buổi ngoài ảnh. Không lấy ô trống, tiêu đề, nút bấm hoặc nhãn "Chưa xếp slot". Chỉ trả JSON.
+[{"subject":"PRM393","classCode":"SE1801","date":"2026-09-28","weekday":1,"daySlot":2,"sessionNumber":1,"totalSessions":20}]
+Nếu ảnh chỉ ghi ngày/tháng, date dùng "dd/MM" (ví dụ "25/10"); không tự đoán năm. weekday là Thứ 2=1 đến Chủ nhật=7 nếu nhìn thấy, nếu không thì null. Tổng số buổi có thể là 10, 20 hoặc 30; lấy từ mẫu "Buổi x/y" khi nhìn thấy. Chỉ chép dữ liệu nhìn thấy. Nếu không thấy ngày, slot, số buổi hoặc tổng buổi, đặt trường tương ứng null. Không đoán ngày bắt đầu khóa học, học kỳ hay các buổi ngoài ảnh; ứng dụng sẽ tự suy ra từ dữ liệu đọc được. Không lấy ô trống, tiêu đề, nút bấm hoặc nhãn "Chưa xếp slot". Chỉ trả JSON.
 ''';
 
   static const String _systemPrompt = '''
@@ -375,8 +375,12 @@ Quy tắc bắt buộc:
         .toList();
   }
 
-  static List<OcrTimetableItem> parseTimetableJson(String rawText) {
+  static List<OcrTimetableItem> parseTimetableJson(
+    String rawText, {
+    DateTime? referenceDate,
+  }) {
     final rows = _decodeOcrJson(rawText);
+    final reference = referenceDate ?? DateTime.now();
     final positions = <String, int>{};
     final result = <OcrTimetableItem>[];
     for (final row in rows.whereType<Map<String, dynamic>>()) {
@@ -387,17 +391,8 @@ Quy tắc bắt buộc:
           .toUpperCase();
       if (subject.isEmpty && classCode.isEmpty) continue;
       final dateText = row['date']?.toString().trim();
-      final parsedDate = dateText == null ? null : DateTime.tryParse(dateText);
-      final date =
-          parsedDate != null &&
-              RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dateText!) &&
-              '${parsedDate.year.toString().padLeft(4, '0')}-${parsedDate.month.toString().padLeft(2, '0')}-${parsedDate.day.toString().padLeft(2, '0')}' ==
-                  dateText &&
-              parsedDate.year >= 2020 &&
-              parsedDate.year <= 2100 &&
-              parsedDate.weekday != DateTime.sunday
-          ? parsedDate
-          : null;
+      final weekday = int.tryParse('${row['weekday'] ?? ''}');
+      final date = _parseTimetableDate(dateText, reference, weekday);
       final slot = int.tryParse('${row['daySlot'] ?? ''}');
       final item = OcrTimetableItem(
         subject: subject,
@@ -412,11 +407,27 @@ Quy tắc bắt buộc:
         final previousIndex = positions[key];
         if (previousIndex != null) {
           final previous = result[previousIndex];
-          if (item.sessionNumber != null &&
-              (previous.sessionNumber == null ||
-                  item.sessionNumber! < previous.sessionNumber!)) {
-            result[previousIndex] = item;
-          }
+          final useCurrent =
+              (previous.date == null && item.date != null) ||
+              (previous.date == null &&
+                  item.date == null &&
+                  previous.daySlot == null &&
+                  item.daySlot != null) ||
+              ((previous.date == null) == (item.date == null) &&
+                  item.sessionNumber != null &&
+                  (previous.sessionNumber == null ||
+                      item.sessionNumber! < previous.sessionNumber!));
+          final selected = useCurrent ? item : previous;
+          result[previousIndex] = OcrTimetableItem(
+            subject: selected.subject,
+            classCode: selected.classCode,
+            date: selected.date,
+            daySlot: selected.daySlot,
+            sessionNumber: selected.sessionNumber,
+            totalSessions:
+                selected.totalSessions ??
+                (useCurrent ? previous.totalSessions : item.totalSessions),
+          );
           continue;
         }
         positions[key] = result.length;
@@ -424,6 +435,62 @@ Quy tắc bắt buộc:
       result.add(item);
     }
     return result;
+  }
+
+  static DateTime? _parseTimetableDate(
+    String? text,
+    DateTime reference,
+    int? weekday,
+  ) {
+    if (text == null || text.isEmpty) return null;
+    final iso = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(text);
+    if (iso != null) {
+      return _validTeachingDate(
+        int.parse(iso[1]!),
+        int.parse(iso[2]!),
+        int.parse(iso[3]!),
+      );
+    }
+    final short = RegExp(r'^(\d{1,2})/(\d{1,2})$').firstMatch(text);
+    if (short == null) return null;
+    final day = int.parse(short[1]!);
+    final month = int.parse(short[2]!);
+    final candidates = <DateTime>[
+      for (final year in [
+        reference.year - 1,
+        reference.year,
+        reference.year + 1,
+      ])
+        ?_validTeachingDate(year, month, day),
+    ];
+    final choices = weekday != null && weekday >= 1 && weekday <= 7
+        ? candidates.where((date) => date.weekday == weekday).toList()
+        : candidates;
+    if (choices.isEmpty) return null;
+    choices.sort((left, right) {
+      final leftDistance = left.difference(reference).inDays.abs();
+      final rightDistance = right.difference(reference).inDays.abs();
+      return leftDistance.compareTo(rightDistance);
+    });
+    return choices.first;
+  }
+
+  static DateTime? _validTeachingDate(int year, int month, int day) {
+    if (year < 2020 ||
+        year > 2100 ||
+        month < 1 ||
+        month > 12 ||
+        day < 1 ||
+        day > 31) {
+      return null;
+    }
+    final date = DateTime(year, month, day);
+    return date.year == year &&
+            date.month == month &&
+            date.day == day &&
+            date.weekday != DateTime.sunday
+        ? date
+        : null;
   }
 
   static List<dynamic> _decodeOcrJson(String rawText) {

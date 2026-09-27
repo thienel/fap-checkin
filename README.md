@@ -222,9 +222,11 @@ Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore n
 
 ## Quy tắc lịch
 
-- `20 slot / 10 tuần` và `10 slot / 5 tuần`: cộng 3 ngày học, bỏ Chủ nhật.
-- `10 slot / 10 tuần`: cộng 7 ngày.
-- `20 slot / 3 tuần` và `10 slot / 3 tuần`: học các ngày liên tiếp, bỏ Chủ nhật.
+- `20 slot / 10 tuần`: 2 slot mỗi tuần theo cặp ngày, cách nhau 3 ngày học và bỏ Chủ nhật; mỗi slot 2 giờ 15 phút.
+- `30 slot / 3 tuần`: 2 slot mỗi ngày Thứ 2–6, 10 slot mỗi tuần; mỗi slot 1 giờ 30 phút. Khi tạo lớp, chọn slot bắt đầu từ 1–6 để xếp hai slot liên tiếp trong ngày.
+- `10 slot / 10 tuần`: 1 slot mỗi tuần.
+- Các preset `10 slot / 5 tuần`, `20 slot / 3 tuần` và `10 slot / 3 tuần` vẫn có trong dữ liệu cũ nhưng không còn là lựa chọn tạo lớp mới.
+- Học kỳ tự suy từ ngày trên ảnh TKB: tháng 1–4 là Spring, 5–8 là Summer, 9–12 là Fall.
 - Ngày bắt đầu là slot 1 và không được là Chủ nhật.
 - Số tuần là nhãn preset; việc sinh lịch dừng khi đủ số slot.
 
