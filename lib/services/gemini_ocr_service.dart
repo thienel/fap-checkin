@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -90,6 +91,7 @@ abstract final class GeminiOcrSettings {
       _defaultFile,
       File('gemini.local.json'),
       executableFile,
+      File('firebase.desktop.json'),
     ]) {
       if (!await file.exists()) continue;
       try {
@@ -259,6 +261,10 @@ Quy tắc bắt buộc:
         if (!enableFallback || model == modelsToTry.last) {
           rethrow;
         }
+      } on TimeoutException {
+        throw const FormatException(
+          'Quá thời gian phản hồi từ AI (ảnh quá lớn hoặc đường truyền chậm). Hãy thử lại hoặc cắt gọn vùng bảng danh sách.',
+        );
       } catch (e) {
         lastErrorMessage = e.toString();
         // Nếu lỗi không phải do Rate Limit (như ảnh lỗi, mạng hỏng, 401...) thì ném lỗi ngay
@@ -298,6 +304,7 @@ Quy tắc bắt buộc:
       'generationConfig': {
         'temperature': 0.1,
         'response_mime_type': 'application/json',
+        'thinkingConfig': {'thinkingBudget': 1},
       },
     };
 
@@ -310,7 +317,7 @@ Quy tắc bắt buộc:
           },
           body: jsonEncode(requestBody),
         )
-        .timeout(const Duration(seconds: 60));
+        .timeout(const Duration(seconds: 120));
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;

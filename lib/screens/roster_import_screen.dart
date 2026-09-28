@@ -341,12 +341,19 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
 
   Future<void> _pickImageForOcr() async {
     if (_activeApiKey.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Chưa có cấu hình quét ảnh. Liên hệ quản trị viên.'),
-        ),
-      );
-      return;
+      if (GeminiOcrSettings.apiKey.trim().isNotEmpty) {
+        setState(() {
+          _activeApiKey = GeminiOcrSettings.apiKey;
+          _activeModel = GeminiOcrSettings.model;
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Chưa có cấu hình quét ảnh. Liên hệ quản trị viên.'),
+          ),
+        );
+        return;
+      }
     }
 
     OcrScanAction scanAction = OcrScanAction.replace;
@@ -575,6 +582,7 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
               future: _classes,
               builder: (context, snapshot) {
                 return DropdownButtonFormField<CourseClassSummary>(
+                  isExpanded: true,
                   initialValue: _selectedClass,
                   decoration: const InputDecoration(labelText: 'Môn–lớp'),
                   items: [
@@ -582,7 +590,10 @@ class _RosterImportScreenState extends State<RosterImportScreen> {
                         in snapshot.data ?? const <CourseClassSummary>[])
                       DropdownMenuItem(
                         value: course,
-                        child: Text(course.label),
+                        child: Text(
+                          course.label,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                   ],
                   onChanged: (_importing || _scanningOcr)
