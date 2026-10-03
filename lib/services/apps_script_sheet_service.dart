@@ -14,13 +14,16 @@ class AppsScriptSheetService {
   final http.Client _client;
   final String _url;
   final String _secret;
+  bool _instanceSheetsSupported = false;
 
   bool get isConfigured => _url.isNotEmpty && _secret.isNotEmpty;
 
   Future<void> upsert({
     required String recordId,
+    required int revision,
     required String subject,
     required String classCode,
+    String? courseClassId,
     required int slot,
     required String date,
     required String email,
@@ -29,12 +32,16 @@ class AppsScriptSheetService {
     required String attendanceStatus,
     required String recordSource,
     String? reason,
+    bool deferSort = false,
   }) async {
+    await _requireInstanceSheets(courseClassId, subject, classCode);
     final payload = <String, Object>{
       'action': 'upsert',
       'recordId': recordId,
+      'revision': revision,
       'subject': subject,
       'classCode': classCode,
+      ...?(courseClassId == null ? null : {'courseClassId': courseClassId}),
       'slot': slot,
       'date': date,
       'email': email,
@@ -44,38 +51,60 @@ class AppsScriptSheetService {
           : {'checkedInAt': checkedInAt.toUtc().toIso8601String()}),
       'attendanceStatus': attendanceStatus,
       'recordSource': recordSource,
+      if (deferSort) 'deferSort': true,
       ...?(reason == null ? null : {'reason': reason}),
     };
-    try {
-      await _post(payload);
-    } on SheetSyncException catch (error) {
-      final unsupported =
-          error.message.contains('không được hỗ trợ') ||
-          error.message.toLowerCase().contains('not supported');
-      // Deployments created before Phase 4 only understand `append`. Keep QR
-      // attendance syncing while the Apps Script deployment is upgraded. A
-      // manual/policy record must not use this fallback because old scripts
-      // cannot represent or update those statuses safely.
-      if (!unsupported ||
-          attendanceStatus != 'present' ||
-          recordSource != 'qr' ||
-          checkedInAt == null ||
-          sessionId.isEmpty) {
-        rethrow;
-      }
-      await _post({...payload, 'action': 'append'});
+    final result = await _post(payload);
+    if (result['revision'] != revision) {
+      throw const SheetSyncException(
+        'Apps Script chưa xác nhận phiên bản bản ghi. Hãy deploy Code.gs mới.',
+      );
     }
   }
 
   Future<void> sort({
     required String subject,
     required String classCode,
+    String? courseClassId,
   }) async {
-    await _post({'action': 'sort', 'subject': subject, 'classCode': classCode});
+    await _requireInstanceSheets(courseClassId, subject, classCode);
+    await _post({
+      'action': 'sort',
+      'subject': subject,
+      'classCode': classCode,
+      ...?(courseClassId == null ? null : {'courseClassId': courseClassId}),
+    });
   }
 
-  Future<void> _post(Map<String, Object> payload) async {
-    if (!isConfigured) return;
+  Future<void> _requireInstanceSheets(
+    String? courseClassId,
+    String subject,
+    String classCode,
+  ) async {
+    if (courseClassId == null ||
+        courseClassId == '${subject}_$classCode' ||
+        _instanceSheetsSupported) {
+      return;
+    }
+    try {
+      final result = await _post({'action': 'capabilities'});
+      if (result['instanceSheets'] == true) {
+        _instanceSheetsSupported = true;
+        return;
+      }
+    } on SheetSyncException catch (error) {
+      if (!error.message.contains('Action không được hỗ trợ')) rethrow;
+      // An older deployment rejects this action before any attendance row is written.
+    }
+    throw const SheetSyncException(
+      'Apps Script chưa hỗ trợ tab riêng theo ID lớp. Hãy deploy Code.gs mới.',
+    );
+  }
+
+  Future<Map<String, dynamic>> _post(Map<String, Object> payload) async {
+    if (!isConfigured) {
+      throw const SheetSyncException('Apps Script chưa được cấu hình.');
+    }
 
     final endpoint = Uri.parse(_url);
     var response = await _client
@@ -136,6 +165,7 @@ class AppsScriptSheetService {
         message is String ? message : 'Không thể đồng bộ Google Sheets.',
       );
     }
+    return Map<String, dynamic>.from(decoded);
   }
 }
 

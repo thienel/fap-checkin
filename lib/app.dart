@@ -5,6 +5,7 @@ import 'screens/configuration_error_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/attendance_api.dart';
+import 'theme/app_theme.dart';
 
 class AttendanceApp extends StatelessWidget {
   const AttendanceApp({super.key, required this.configurationError});
@@ -13,29 +14,10 @@ class AttendanceApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF164E63),
-      brightness: Brightness.light,
-    );
-
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'FAP Check Attendance',
-      theme: ThemeData(
-        colorScheme: colorScheme,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF7F9FA),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-          filled: true,
-          fillColor: Colors.white,
-        ),
-        cardTheme: const CardThemeData(
-          color: Colors.white,
-          elevation: 0,
-          margin: EdgeInsets.zero,
-        ),
-      ),
+      theme: buildAppTheme(),
       home: configurationError != null
           ? ConfigurationErrorScreen(error: configurationError!)
           : _AuthGate(api: AttendanceApi()),

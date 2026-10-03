@@ -15,14 +15,15 @@
           </svg>
         </div>
         <p class="eyebrow">FAP CHECK ATTENDANCE</p>
-        <h1 id="title">Xác nhận điểm danh</h1>
+        <h1 id="title" tabindex="-1">Xác nhận điểm danh</h1>
         <p id="message" class="message">
           Đăng nhập bằng tài khoản Google trước khi mã QR hết hạn.
         </p>
 
-        <div id="status" class="status hidden" role="status" aria-live="polite"></div>
+        <div id="status" class="status hidden" aria-hidden="true"></div>
+        <div id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
-        <button id="sign-in" class="primary-button" type="button">
+        <button id="sign-in" class="primary-button hidden" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.4-.18-2.06H12v3.9h5.38a4.6 4.6 0 0 1-2 3.02v2.53h3.24c1.9-1.75 2.98-4.33 2.98-7.39Z"/>
             <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.38l-3.24-2.53c-.9.6-2.05.96-3.38.96-2.61 0-4.82-1.77-5.61-4.14H3.04v2.61A10 10 0 0 0 12 22Z"/>
@@ -32,8 +33,56 @@
           Tiếp tục với Google
         </button>
 
+        <div id="browser-help" class="browser-help hidden">
+          <p>Đang dùng Zalo hoặc Facebook? Chọn menu ⋮ / … → Mở bằng trình duyệt, hoặc sao chép liên kết và dán vào Chrome/Safari. Nếu QR hết hạn, hãy quét QR mới bằng camera điện thoại.</p>
+          <button id="copy-link" class="secondary-button" type="button">Sao chép liên kết</button>
+          <p id="copy-link-status" role="status" aria-live="polite"></p>
+        </div>
+
+        <form id="checkout-form" class="checkout-form hidden">
+          <label class="field-label" for="checkout-code">Mã xác nhận điểm danh</label>
+          <input
+            id="checkout-code"
+            name="checkoutCode"
+            type="text"
+            inputmode="text"
+            autocomplete="one-time-code"
+            autocapitalize="characters"
+            minlength="5"
+            maxlength="5"
+            pattern="[A-Za-z0-9]{5}"
+            aria-describedby="code-help code-error"
+            spellcheck="false"
+            required
+          />
+          <p id="code-help" class="field-help">Mã xác nhận gồm 5 ký tự chữ hoặc số.</p>
+          <p id="code-error" class="field-error" aria-live="polite"></p>
+          <button id="checkout-submit" class="primary-button" type="submit">
+            Xác nhận điểm danh
+          </button>
+          <button id="switch-account" class="secondary-button" type="button">
+            Đổi tài khoản Google
+          </button>
+        </form>
+
+        <section id="leave-panel" class="leave-panel hidden" aria-label="Xin phép nghỉ">
+          <p id="leave-account" class="field-help"></p>
+          <h2>Chọn buổi xin nghỉ</h2>
+          <form id="leave-form">
+            <div id="leave-slots" class="leave-slots"></div>
+            <label class="field-label" for="leave-reason">Lý do xin nghỉ</label>
+            <textarea id="leave-reason" minlength="10" maxlength="1000" rows="4" required></textarea>
+            <p class="field-help">Từ 10 đến 1000 ký tự. Đơn đã gửi không thể gửi lại cho cùng buổi.</p>
+            <button id="leave-submit" class="primary-button" type="submit">Gửi đơn xin nghỉ</button>
+          </form>
+          <h2>Trạng thái đơn</h2>
+          <div id="leave-history" aria-live="polite"></div>
+          <button id="leave-refresh" class="secondary-button" type="button">Tải lại trạng thái</button>
+          <button id="leave-switch-account" class="secondary-button" type="button">Đổi tài khoản Google</button>
+        </section>
+
         <p class="privacy">
-          Hệ thống chỉ sử dụng email Google để ghi nhận điểm danh.
+          Hệ thống dùng email Google và mã xác nhận để điểm danh.
         </p>
       </section>
     </main>

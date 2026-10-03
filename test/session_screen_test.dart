@@ -10,19 +10,48 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class FakeAttendanceApi implements AttendanceApi {
+  FakeAttendanceApi({
+    this.failFirstStop = false,
+    this.activeAfterFailure = true,
+    this.failAfterFirstQr = false,
+    this.qrLifetime = const Duration(seconds: 15),
+    this.stopResult,
+  });
+
+  final bool failFirstStop;
+  final bool activeAfterFailure;
+  final bool failAfterFirstQr;
+  final Duration qrLifetime;
+  final Future<List<String>>? stopResult;
+  int issueCount = 0;
+  int stopCount = 0;
+
   @override
   Future<IssuedQr> issueQr(String sessionId) async {
+    issueCount++;
+    if (failAfterFirstQr && issueCount > 1) throw Exception('QR unavailable');
     return IssuedQr(
       url: 'https://test-qr.web.app?token=test-token',
-      expiresAt: DateTime.now().add(const Duration(seconds: 15)),
+      expiresAt: DateTime.now().add(qrLifetime),
     );
   }
 
   @override
-  Future<void> stopAttendance(String sessionId) async {}
+  Future<List<String>> stopAttendance(String sessionId) async {
+    stopCount++;
+    if (failFirstStop && stopCount == 1) throw Exception('network unavailable');
+    if (stopResult != null) return stopResult!;
+    return [];
+  }
 
   @override
-  Future<void> syncPendingCheckIns({String? sessionId}) async {}
+  Future<bool> isAttendanceActive(String sessionId) async => activeAfterFailure;
+
+  @override
+  Future<SheetSyncSummary> syncPendingCheckIns({
+    String? sessionId,
+    bool force = false,
+  }) async => const SheetSyncSummary();
 
   @override
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -76,28 +105,125 @@ void main() {
     attendancePolicy: AttendancePolicy.normal,
   );
 
-  testWidgets('SessionScreen hiển thị đầy đủ danh sách, thống kê và bộ lọc trạng thái',
-      (tester) async {
-    // Giả lập stream dữ liệu
-    final controller = StreamController<LiveAttendanceState>.broadcast();
-
-    final liveStudents = [
-      const LiveStudentAttendance(
-        student: student1,
-        status: AttendanceStatus.present,
-        checkedInAt: null,
+  testWidgets('expired QR is hidden in fullscreen after refresh fails', (
+    tester,
+  ) async {
+    var currentTime = DateTime.now();
+    final fakeApi = FakeAttendanceApi(failAfterFirstQr: true);
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SessionScreen(
+          api: fakeApi,
+          session: session,
+          now: () => currentTime,
+          liveSessionService: FakeLiveSessionService(
+            const Stream<LiveAttendanceState>.empty(),
+          ),
+        ),
       ),
-      const LiveStudentAttendance(
-        student: student2,
-        status: AttendanceStatus.notYetOpen,
-        checkedInAt: null,
-      ),
-    ];
+    );
+    await tester.pump();
+    expect(find.textContaining('QR còn hiệu lực'), findsOneWidget);
+    await tester.tap(find.text('Phóng to QR'));
+    await tester.pump();
+    currentTime = currentTime.add(const Duration(seconds: 30));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(fakeApi.issueCount, 2);
+    expect(
+      find.text('Đang kết nối lại — tạm ngừng quét'),
+      findsAtLeastNWidgets(1),
+    );
+  });
 
-    final fakeService = FakeLiveSessionService(controller.stream);
-    final fakeApi = FakeAttendanceApi();
+  testWidgets(
+    'SessionScreen hiển thị đầy đủ danh sách, thống kê và bộ lọc trạng thái',
+    (tester) async {
+      // Giả lập stream dữ liệu
+      final controller = StreamController<LiveAttendanceState>.broadcast();
 
-    // Set kích thước màn hình desktop
+      final liveStudents = [
+        const LiveStudentAttendance(
+          student: student1,
+          status: AttendanceStatus.present,
+          checkedInAt: null,
+        ),
+        const LiveStudentAttendance(
+          student: student2,
+          status: AttendanceStatus.notYetOpen,
+          checkedInAt: null,
+        ),
+      ];
+
+      final fakeService = FakeLiveSessionService(controller.stream);
+      final fakeApi = FakeAttendanceApi();
+
+      // Set kích thước màn hình desktop
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SessionScreen(
+            api: fakeApi,
+            session: session,
+            liveSessionService: fakeService,
+          ),
+        ),
+      );
+
+      // Ban đầu hiển thị loading
+      controller.add(const LiveAttendanceLoading());
+      await tester.pump();
+      expect(find.text('Đang tải danh sách lớp học…'), findsOneWidget);
+
+      // Khi dữ liệu loaded tới
+      controller.add(
+        LiveAttendanceLoaded(
+          students: liveStudents,
+          stats: LiveSessionStats.fromList(liveStudents),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Kiểm tra thông tin header & thống kê
+      expect(find.text('PRM393 · SE1801'), findsOneWidget);
+      expect(find.text('Đã điểm danh'), findsAtLeastNWidgets(1));
+      expect(find.text('Chưa điểm danh'), findsAtLeastNWidgets(1));
+
+      // Tìm thấy 2 sinh viên trong bảng
+      expect(find.text('Nguyễn Ngọc Tường Vy'), findsOneWidget);
+      expect(find.text('SE183571'), findsOneWidget);
+      expect(find.text('Dương Đình Khôi'), findsOneWidget);
+      expect(find.text('SE182046'), findsOneWidget);
+
+      // Nút Phóng to QR có xuất hiện
+      expect(find.text('Phóng to QR'), findsOneWidget);
+
+      // Bấm nút Phóng to QR
+      await tester.tap(find.text('Phóng to QR'));
+      await tester.pumpAndSettle();
+
+      // Dialog fullscreen QR hiển thị
+      expect(find.text('ESC để thoát'), findsOneWidget);
+
+      // Đóng dialog
+      await tester.tap(find.byIcon(Icons.close_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('ESC để thoát'), findsNothing);
+
+      await controller.close();
+    },
+  );
+
+  testWidgets('failed stop keeps the session open and resumes QR rotation', (
+    tester,
+  ) async {
+    final fakeApi = FakeAttendanceApi(failFirstStop: true);
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -107,51 +233,117 @@ void main() {
         home: SessionScreen(
           api: fakeApi,
           session: session,
-          liveSessionService: fakeService,
+          liveSessionService: FakeLiveSessionService(const Stream.empty()),
         ),
       ),
     );
-
-    // Ban đầu hiển thị loading
-    controller.add(const LiveAttendanceLoading());
     await tester.pump();
-    expect(find.text('Đang tải danh sách lớp học…'), findsOneWidget);
+    expect(fakeApi.issueCount, 1);
 
-    // Khi dữ liệu loaded tới
-    controller.add(
-      LiveAttendanceLoaded(
-        students: liveStudents,
-        stats: LiveSessionStats.fromList(liveStudents),
+    await tester.tap(find.text('Ngừng điểm danh'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Xác nhận ngừng'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(fakeApi.stopCount, 1);
+    expect(find.textContaining('Không thể ngừng phiên'), findsOneWidget);
+    expect(fakeApi.issueCount, greaterThan(1));
+    expect(find.text('Ngừng điểm danh'), findsOneWidget);
+  });
+
+  testWidgets('slow stop shows progress then closes with a sync warning', (
+    tester,
+  ) async {
+    final completion = Completer<List<String>>();
+    final fakeApi = FakeAttendanceApi(stopResult: completion.future);
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => FilledButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SessionScreen(
+                    api: fakeApi,
+                    session: session,
+                    liveSessionService: FakeLiveSessionService(
+                      const Stream.empty(),
+                    ),
+                  ),
+                ),
+              ),
+              child: const Text('Open session'),
+            ),
+          ),
+        ),
       ),
     );
+    await tester.tap(find.text('Open session'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Ngừng điểm danh'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Xác nhận ngừng'));
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('Đang ngừng điểm danh…'), findsOneWidget);
+    expect(fakeApi.stopCount, 1);
+    completion.complete(['Google Sheets đang đồng bộ nền.']);
+    await tester.pumpAndSettle();
+    expect(find.byType(SessionScreen), findsNothing);
+    expect(find.textContaining('Đã ngừng phiên.'), findsOneWidget);
+    expect(
+      find.textContaining('Google Sheets đang đồng bộ nền.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('stop response lost after commit still closes the session', (
+    tester,
+  ) async {
+    final fakeApi = FakeAttendanceApi(
+      failFirstStop: true,
+      activeAfterFailure: false,
+    );
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => FilledButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SessionScreen(
+                    api: fakeApi,
+                    session: session,
+                    liveSessionService: FakeLiveSessionService(
+                      const Stream.empty(),
+                    ),
+                  ),
+                ),
+              ),
+              child: const Text('Open session'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open session'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Ngừng điểm danh'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Xác nhận ngừng'));
+    await tester.pump();
     await tester.pumpAndSettle();
 
-    // Kiểm tra thông tin header & thống kê
-    expect(find.text('PRM393 · SE1801'), findsOneWidget);
-    expect(find.text('Đã điểm danh'), findsAtLeastNWidgets(1));
-    expect(find.text('Chưa điểm danh'), findsAtLeastNWidgets(1));
-
-    // Tìm thấy 2 sinh viên trong bảng
-    expect(find.text('Nguyễn Ngọc Tường Vy'), findsOneWidget);
-    expect(find.text('SE183571'), findsOneWidget);
-    expect(find.text('Dương Đình Khôi'), findsOneWidget);
-    expect(find.text('SE182046'), findsOneWidget);
-
-    // Nút Phóng to QR có xuất hiện
-    expect(find.text('Phóng to QR'), findsOneWidget);
-
-    // Bấm nút Phóng to QR
-    await tester.tap(find.text('Phóng to QR'));
-    await tester.pumpAndSettle();
-
-    // Dialog fullscreen QR hiển thị
-    expect(find.text('ESC để thoát'), findsOneWidget);
-
-    // Đóng dialog
-    await tester.tap(find.byIcon(Icons.close_rounded));
-    await tester.pumpAndSettle();
-    expect(find.text('ESC để thoát'), findsNothing);
-
-    await controller.close();
+    expect(fakeApi.stopCount, 1);
+    expect(find.byType(SessionScreen), findsNothing);
   });
 }

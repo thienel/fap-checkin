@@ -30,9 +30,21 @@ Trong [Firebase Console](https://console.firebase.google.com/):
 
 ```bash
 firebase login
-firebase use fap-checkin
+firebase use fap-checkin-c8c8d
 firebase projects:list
 ```
+
+Nếu ứng dụng báo thiếu quyền, kiểm tra email và UID trong đúng project mà
+desktop đang dùng bằng Firebase CLI (không cần mật khẩu tài khoản giảng viên):
+
+```bash
+node tool/teacher_access.cjs giangvien@example.com
+```
+
+Chỉ khi document `teachers/<UID>` chưa có `active: true`, chạy lại với
+`node tool/teacher_access.cjs giangvien@example.com --grant` để cấp quyền cho đúng UID. Lệnh giữ nguyên các trường khác của
+document hiện có. `node tool/teacher_access.cjs --rules` đối chiếu Rules đang
+triển khai với `firestore.rules` trong repo.
 
 ## 2. Cấu hình trang check-in
 
@@ -61,6 +73,28 @@ tượng chỉnh sửa, chọn **Version → New version** rồi **Deploy**. Cá
 URL trong `firebase.desktop.json`. Nếu tạo một deployment hoàn toàn mới thì phải
 cập nhật lại `APPS_SCRIPT_URL` và build lại ứng dụng desktop.
 
+Đồng bộ theo `revision` yêu cầu deploy phiên bản `Code.gs` mới trước khi chạy
+desktop mới. Desktop chỉ đánh dấu `synced` khi Apps Script trả về đúng revision;
+deployment cũ không xác nhận revision sẽ để bản ghi ở trạng thái `error` để thử
+lại sau khi cập nhật Apps Script. Các tab Sheets hiện có được thêm cột `Revision`
+tự động khi nhận lượt ghi đầu tiên từ bản mới.
+
+### Định danh lớp theo học kỳ
+
+Lớp mới có ID riêng và trường `academicTerm` (ví dụ `2026-FALL`). Cùng giảng viên
+chỉ được tạo một lớp cho mỗi bộ học kỳ–môn–mã lớp; giảng viên khác hoặc học kỳ
+khác có thể dùng lại mã môn–lớp. Các lớp cũ giữ nguyên ID và đường dẫn Firestore;
+không đổi tên tài liệu `courseClasses`, `attendance`, phiên hay bản ghi đã có.
+
+Khi triển khai thay đổi này, cập nhật Apps Script `Code.gs` trước, rồi triển khai
+Firestore Rules và desktop mới. Apps Script giữ tên tab cũ `môn_lớp` cho lớp có ID
+legacy; mỗi lớp mới dùng tab riêng bắt đầu bằng ID lớp. `Record ID` cũ được giữ
+nguyên, còn bản ghi mới đã chứa ID lớp trong đường dẫn nên không trùng với lịch
+sử. Desktop kiểm tra khả năng hỗ trợ tab riêng trước khi gửi bản ghi lớp mới;
+deployment Apps Script cũ sẽ để bản ghi chờ đồng bộ thay vì ghi nhầm vào tab cũ.
+Không cần chuyển dữ liệu cũ; nếu cần di chuyển một lớp đang dùng, phải sao lưu
+và đối chiếu roster, phiên, attendance và tab Sheets theo ID trước khi thực hiện.
+
 Các thay đổi điểm danh được lưu vào Firestore trước với `syncStatus: pending`.
 Nếu Apps Script tạm thời lỗi, bản ghi chuyển thành `error` thay vì bị mất. Sau khi
 deployment hoạt động, nút làm mới ở màn hình **Tổng quan lớp** sẽ thử đồng bộ lại
@@ -84,7 +118,29 @@ cp firebase.desktop.example.json firebase.desktop.json
 }
 ```
 
-`firebase.desktop.json`, `web-checkin/.env` và các secret không được commit lên Git.
+`firebase.desktop.json`, `gemini.local.json`, `web-checkin/.env` và các secret không được commit lên Git.
+
+### Nhập dữ liệu từ ảnh
+
+Sao chép `gemini.local.example.json` thành `gemini.local.json`, rồi điền
+`GEMINI_API_KEY` một lần. Khi chạy từ mã nguồn, đặt file ở thư mục gốc project.
+Nếu chạy bản desktop đã đóng gói, có thể đặt file cạnh chương trình hoặc nhập
+key một lần trong app; app sẽ lưu file trong thư mục cấu hình của người dùng.
+
+Trong **Danh sách sinh viên**, chọn **Quét ảnh AI (OCR)**, kiểm tra bảng nhận dạng
+và chạm từng dòng để sửa. Nếu ảnh không có
+email, ô email để trống và phải được điền trước khi import.
+
+Trong **Lịch hôm nay** hoặc **Lịch trong tuần**, chọn **Tạo môn–lớp → Quét ảnh TKB**.
+Các môn nhận dạng được hiện trong danh sách; kiểm tra từng môn, ngày bắt đầu của
+buổi 1, cấu hình số buổi và slot rồi mới tạo. Ảnh của một tuần không đủ để suy ra
+toàn bộ lịch học kỳ.
+
+Gemini API key được lưu trong `gemini.local.json` trên máy và gửi đến Gemini qua
+HTTPS. Không đặt key này trong `firebase.desktop.json` hoặc bản build desktop.
+Vì ứng dụng gọi Gemini trực tiếp từ máy giảng viên, người dùng trên máy đó vẫn có
+thể truy cập key của chính phiên chạy; nếu cần một key dùng chung, phải chuyển lời
+gọi OCR sang dịch vụ máy chủ giữ secret.
 
 ## 5. Cài đặt và deploy trên Spark
 
@@ -94,7 +150,7 @@ npm --prefix web-checkin install
 firebase deploy --only firestore,hosting
 ```
 
-Không chạy `--only functions` vì Cloud Functions cần Blaze. `firebase.json` hiện không còn cấu hình deploy Functions; thư mục `functions/` chỉ được giữ làm mã legacy để đối chiếu và có thể xóa sau.
+`firebase.json` chỉ cấu hình Firestore và Hosting. Vì vậy cả lệnh deploy mặc định cũng không triển khai Cloud Functions. Thư mục `functions/` là mã legacy để đối chiếu, không thuộc luồng desktop + Rules + Apps Script hiện tại.
 
 ### Deploy Firestore an toàn
 
@@ -116,6 +172,12 @@ URL check-in cố định:
 ```text
 https://fap-checkin-c8c8d.web.app/check-in?t=<QR_TOKEN>
 ```
+
+### Xin phép nghỉ theo buổi
+
+Trong ứng dụng desktop, giảng viên mở **Yêu cầu nghỉ**, chọn môn–lớp và sao chép liên kết sinh viên. Sinh viên đăng nhập bằng email Google có trong roster, chọn một hoặc nhiều buổi tương lai và gửi lý do (10–1000 ký tự). Mỗi sinh viên chỉ gửi được một đơn cho mỗi buổi; trạng thái và phản hồi hiển thị lại trên cùng trang khi tải lại.
+
+Giảng viên lọc đơn chờ xử lý, duyệt hoặc từ chối kèm phản hồi. Quyết định và audit được ghi cùng một giao dịch, nên không thể duyệt lặp. Đơn đã duyệt chỉ tạo record `excused` khi buổi đó mở; nếu đã có điểm danh thực tế, hệ thống giữ nguyên record và cảnh báo xung đột trong hộp thư. Không cần tải tệp minh chứng ở phiên bản này.
 
 ## 6. Chạy desktop
 
@@ -152,6 +214,7 @@ Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore n
 ## Quy tắc bảo mật và dữ liệu
 
 - Thời hạn QR được tính từ `serverTimestamp()` của Firestore, không tin đồng hồ điện thoại hay desktop.
+- Checkout code được đổi trước hạn vài giây; mã vừa đổi vẫn hợp lệ thêm 10 giây để tránh từ chối lượt gửi đang thực hiện.
 - Security Rules từ chối đọc QR sau thời hạn và từ chối ghi khi session đã dừng.
 - Trạng thái cuối có đường dẫn `attendance/<môn-lớp>/slots/<slot>/records/<student-id>`; QR chỉ được tạo trạng thái `present`, còn giảng viên mới có quyền chỉnh `present/absent/excused`.
 - Mỗi lần giảng viên chỉnh tay tạo một document bất biến trong `records/<student-id>/audit`; tắt miễn toàn khóa không sửa lịch sử các slot cũ.
@@ -160,10 +223,12 @@ Nếu chưa cấu hình Apps Script, app vẫn điểm danh và lưu Firestore n
 
 ## Quy tắc lịch
 
-- `20 slot / 10 tuần` và `10 slot / 5 tuần`: cộng 3 ngày học, bỏ Chủ nhật.
-- `10 slot / 10 tuần`: cộng 7 ngày.
-- `20 slot / 3 tuần` và `10 slot / 3 tuần`: học các ngày liên tiếp, bỏ Chủ nhật.
-- Ngày bắt đầu là slot 1 và không được là Chủ nhật.
+- `20 slot / 10 tuần`: 2 slot mỗi tuần theo cặp ngày cách nhau 3 hoặc 4 ngày; Chủ nhật có thể là ngày học. Mỗi slot 2 giờ 15 phút.
+- `30 slot / 3 tuần`: 2 slot mỗi ngày trừ Thứ Bảy; Chủ nhật có thể là ngày học. Mỗi slot 1 giờ 30 phút. Khi tạo lớp, chọn slot bắt đầu từ 1–6 để xếp hai slot liên tiếp trong ngày.
+- `10 slot / 10 tuần`: 1 slot mỗi tuần.
+- Các preset `10 slot / 5 tuần`, `20 slot / 3 tuần` và `10 slot / 3 tuần` vẫn có trong dữ liệu cũ nhưng không còn là lựa chọn tạo lớp mới.
+- Học kỳ tự suy từ ngày trên ảnh TKB: tháng 1–4 là Spring, 5–8 là Summer, 9–12 là Fall.
+- Ngày bắt đầu là slot 1 và có thể là Chủ nhật; block 30 slot không bắt đầu vào Thứ Bảy.
 - Số tuần là nhãn preset; việc sinh lịch dừng khi đủ số slot.
 
 ## Kiểm thử

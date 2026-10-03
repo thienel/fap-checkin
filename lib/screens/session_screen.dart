@@ -10,6 +10,8 @@ import '../domain/live_attendance.dart';
 import '../domain/models.dart';
 import '../services/attendance_api.dart';
 import '../services/live_session_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/app_ui.dart';
 
 enum AttendanceFilter {
   all,
@@ -24,47 +26,64 @@ class SessionScreen extends StatefulWidget {
     required this.api,
     required this.session,
     this.liveSessionService,
+    this.now,
   });
 
   final AttendanceApi api;
   final AttendanceSession session;
   final LiveSessionService? liveSessionService;
+  final DateTime Function()? now;
 
   @override
   State<SessionScreen> createState() => _SessionScreenState();
 }
 
 class _SessionScreenState extends State<SessionScreen> {
+  DateTime get _now => widget.now?.call() ?? DateTime.now();
   late final LiveSessionService _service;
   late final Stream<LiveAttendanceState> _liveStream;
 
   Timer? _rotationTimer;
   Timer? _countdownTimer;
+  Timer? _checkoutRetryTimer;
+  Timer? _qrRetryTimer;
 
   IssuedQr? _qr;
   final ValueNotifier<IssuedQr?> _qrNotifier = ValueNotifier<IssuedQr?>(null);
   late final ValueNotifier<int> _secondsLeftNotifier;
+  final ValueNotifier<int> _qrValidityLeftNotifier = ValueNotifier<int>(0);
+  late final ValueNotifier<int> _checkoutSecondsLeftNotifier;
+  late String _checkoutCode;
+  late DateTime? _checkoutCodeIssuedAt;
 
   bool _issuing = false;
+  bool _rotatingCheckoutCode = false;
   bool _stopping = false;
+  bool _stopCompleted = false;
   bool _retryingSync = false;
   String? _error;
+  String? _stopError;
+  String? _checkoutError;
 
   String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
   AttendanceFilter _selectedFilter = AttendanceFilter.all;
 
   @override
   void initState() {
     super.initState();
-    _service =
-        widget.liveSessionService ?? LiveSessionService(api: widget.api);
+    _service = widget.liveSessionService ?? LiveSessionService(api: widget.api);
 
     // Một subscription duy nhất cho toàn bộ vòng đời của màn hình.
     // Xoay QR tuyệt đối không unsubscribe hoặc reset stream danh sách.
     _liveStream = _service.watchLiveAttendance(session: widget.session);
 
-    _secondsLeftNotifier =
-        ValueNotifier<int>(widget.session.rotationSeconds);
+    _secondsLeftNotifier = ValueNotifier<int>(widget.session.rotationSeconds);
+    _checkoutSecondsLeftNotifier = ValueNotifier<int>(
+      _checkoutSecondsRemaining(widget.session.checkoutCodeIssuedAt),
+    );
+    _checkoutCode = widget.session.checkoutCode;
+    _checkoutCodeIssuedAt = widget.session.checkoutCodeIssuedAt;
 
     _issueQr();
 
@@ -76,8 +95,26 @@ class _SessionScreenState extends State<SessionScreen> {
 
     // Timer đếm ngược giây hiển thị trên UI
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final qr = _qr;
+      if (qr != null) {
+        final remaining = qr.expiresAt.difference(_now).inSeconds;
+        _qrValidityLeftNotifier.value = max(0, remaining);
+        if (remaining <= 0) {
+          setState(() {
+            _qr = null;
+            _qrNotifier.value = null;
+          });
+          unawaited(_issueQr());
+        }
+      }
       if (_secondsLeftNotifier.value > 0) {
         _secondsLeftNotifier.value -= 1;
+      }
+      _checkoutSecondsLeftNotifier.value = _checkoutSecondsRemaining(
+        _checkoutCodeIssuedAt,
+      );
+      if (_checkoutSecondsLeftNotifier.value <= 5 && _checkoutError == null) {
+        unawaited(_rotateCheckoutCode());
       }
     });
   }
@@ -86,8 +123,13 @@ class _SessionScreenState extends State<SessionScreen> {
   void dispose() {
     _rotationTimer?.cancel();
     _countdownTimer?.cancel();
+    _checkoutRetryTimer?.cancel();
+    _qrRetryTimer?.cancel();
     _qrNotifier.dispose();
+    _qrValidityLeftNotifier.dispose();
     _secondsLeftNotifier.dispose();
+    _checkoutSecondsLeftNotifier.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -98,19 +140,82 @@ class _SessionScreenState extends State<SessionScreen> {
       final qr = await widget.api.issueQr(widget.session.id);
       if (mounted) {
         setState(() {
-          _qr = qr;
-          _qrNotifier.value = qr;
+          final valid = qr.expiresAt.isAfter(_now);
+          _qr = valid ? qr : null;
+          _qrNotifier.value = _qr;
+          _qrValidityLeftNotifier.value = valid
+              ? max(0, qr.expiresAt.difference(_now).inSeconds)
+              : 0;
           _secondsLeftNotifier.value = widget.session.rotationSeconds;
-          _error = null;
+          _error = valid ? null : 'QR mới đã hết hạn. Đang thử lại.';
         });
+        if (qr.expiresAt.isAfter(_now)) {
+          _qrRetryTimer?.cancel();
+        } else {
+          _scheduleQrRetry();
+        }
       }
     } catch (error) {
       if (mounted) {
-        setState(() => _error = 'Không tạo được QR mới: $error');
+        setState(() {
+          _qr = null;
+          _qrNotifier.value = null;
+          _qrValidityLeftNotifier.value = 0;
+          _error = 'Không tạo được QR mới: $error';
+        });
+        _scheduleQrRetry();
       }
     } finally {
       _issuing = false;
     }
+  }
+
+  void _scheduleQrRetry() {
+    _qrRetryTimer?.cancel();
+    _qrRetryTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted && !_stopping) unawaited(_issueQr());
+    });
+  }
+
+  Future<void> _rotateCheckoutCode() async {
+    if (_rotatingCheckoutCode || _stopping || _checkoutCode.isEmpty) return;
+    _rotatingCheckoutCode = true;
+    _checkoutRetryTimer?.cancel();
+    try {
+      final rotated = await widget.api.rotateCheckoutCode(widget.session.id);
+      if (mounted) {
+        setState(() {
+          _checkoutCode = rotated.code;
+          _checkoutCodeIssuedAt = rotated.issuedAt;
+          _checkoutSecondsLeftNotifier.value = _checkoutSecondsRemaining(
+            rotated.issuedAt,
+          );
+          _checkoutError = null;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _checkoutError = 'Không thể đổi checkout code: $error');
+        _checkoutRetryTimer = Timer(const Duration(seconds: 5), () {
+          if (!mounted) return;
+          setState(() => _checkoutError = null);
+          unawaited(_rotateCheckoutCode());
+        });
+      }
+    } finally {
+      _rotatingCheckoutCode = false;
+    }
+  }
+
+  int _checkoutSecondsRemaining(DateTime? issuedAt) {
+    if (issuedAt == null) return widget.session.checkoutRotationSeconds;
+    final elapsed = DateTime.now().difference(issuedAt).inSeconds;
+    final remaining = widget.session.checkoutRotationSeconds - elapsed;
+    if (remaining <= 0) return 0;
+    if (remaining > widget.session.checkoutRotationSeconds) {
+      return widget.session.checkoutRotationSeconds;
+    }
+    return remaining;
   }
 
   String _formatDate(String isoDate) {
@@ -123,12 +228,13 @@ class _SessionScreenState extends State<SessionScreen> {
   }
 
   Future<void> _stop() async {
+    if (_stopping) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: Color(0xFFE11D48)),
+            Icon(Icons.warning_amber_rounded, color: AppColors.error),
             SizedBox(width: 10),
             Text('Ngừng điểm danh?'),
           ],
@@ -142,9 +248,7 @@ class _SessionScreenState extends State<SessionScreen> {
             child: const Text('Tiếp tục điểm danh'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFE11D48),
-            ),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text('Xác nhận ngừng'),
           ),
@@ -152,33 +256,72 @@ class _SessionScreenState extends State<SessionScreen> {
       ),
     );
 
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted || _stopping) return;
 
-    setState(() => _stopping = true);
-    _rotationTimer?.cancel();
-    _countdownTimer?.cancel();
+    setState(() {
+      _stopping = true;
+      _stopError = null;
+    });
     try {
-      await widget.api.stopAttendance(widget.session.id);
-      if (mounted) Navigator.of(context).pop();
+      final warnings = await widget.api.stopAttendance(widget.session.id);
+      if (!mounted) return;
+      _finishStop(warnings);
     } catch (error) {
+      if (!mounted) return;
+      var stopError = 'Không thể ngừng phiên: $error';
+      try {
+        if (!await widget.api.isAttendanceActive(widget.session.id)) {
+          if (mounted) {
+            _finishStop([
+              'Phiên đã đóng nhưng chưa xác minh được bước dọn dẹp: $error',
+            ]);
+          }
+          return;
+        }
+      } catch (verificationError) {
+        if (!mounted) return;
+        stopError = 'Không xác minh được trạng thái phiên: $verificationError';
+      }
       if (!mounted) return;
       setState(() {
         _stopping = false;
-        _error = 'Không thể ngừng phiên: $error';
+        _stopError = stopError;
       });
+      unawaited(_issueQr());
+      if (_checkoutSecondsLeftNotifier.value == 0) {
+        unawaited(_rotateCheckoutCode());
+      }
     }
+  }
+
+  void _finishStop(List<String> warnings) {
+    _rotationTimer?.cancel();
+    _countdownTimer?.cancel();
+    _checkoutRetryTimer?.cancel();
+    _qrRetryTimer?.cancel();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Đã ngừng phiên. ${warnings.join(' ')}'.trim())),
+    );
+    setState(() => _stopCompleted = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
   }
 
   Future<void> _retrySheetSync() async {
     if (_retryingSync) return;
     setState(() => _retryingSync = true);
     try {
-      await widget.api.syncPendingCheckIns();
+      final result = await widget.api.syncPendingCheckIns(force: true);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Đã yêu cầu đồng bộ lại với Google Sheets.'),
-          backgroundColor: Color(0xFF0F766E),
+        SnackBar(
+          content: Text(
+            result.notConfigured
+                ? 'Google Sheets chưa được cấu hình.'
+                : 'Đã đồng bộ ${result.synced} bản ghi; còn chờ ${result.pending}, lỗi ${result.error}.',
+          ),
+          backgroundColor: AppColors.primary,
         ),
       );
     } catch (error) {
@@ -186,7 +329,7 @@ class _SessionScreenState extends State<SessionScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Đồng bộ Google Sheets thất bại: $error'),
-          backgroundColor: const Color(0xFFE11D48),
+          backgroundColor: AppColors.error,
         ),
       );
     } finally {
@@ -202,24 +345,26 @@ class _SessionScreenState extends State<SessionScreen> {
         session: widget.session,
         qrNotifier: _qrNotifier,
         countdownNotifier: _secondsLeftNotifier,
+        validityNotifier: _qrValidityLeftNotifier,
       ),
     );
   }
 
-  void _showStudentDetail(CourseStudent student) {
+  void _showStudentDetail(LiveStudentAttendance attendance) {
+    final student = attendance.student;
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Row(
           children: [
-            Icon(Icons.badge_outlined, color: Color(0xFF0F766E)),
+            Icon(Icons.badge_outlined, color: AppColors.primary),
             SizedBox(width: 10),
             Text('Hồ sơ chuyên cần sinh viên'),
           ],
         ),
         content: SizedBox(
-          width: 500,
+          width: appDialogWidth(context, 500),
           child: FutureBuilder<StudentAttendanceDetail>(
             future: widget.api.getStudentAttendanceDetail(
               courseClassId: widget.session.courseClassId,
@@ -290,9 +435,9 @@ class _SessionScreenState extends State<SessionScreen> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF0FDFA),
+                      color: AppColors.successSurface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFCCFBF1)),
+                      border: Border.all(color: AppColors.successSurface),
                     ),
                     child: Row(
                       children: [
@@ -304,7 +449,7 @@ class _SessionScreenState extends State<SessionScreen> {
                                 'Tỷ lệ có mặt',
                                 style: TextStyle(
                                   fontSize: 13,
-                                  color: Color(0xFF0F766E),
+                                  color: AppColors.primary,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -314,14 +459,14 @@ class _SessionScreenState extends State<SessionScreen> {
                                 style: const TextStyle(
                                   fontSize: 28,
                                   fontWeight: FontWeight.w800,
-                                  color: Color(0xFF0F766E),
+                                  color: AppColors.primary,
                                 ),
                               ),
                               Text(
                                 '${detail.attendedSlots} / ${detail.totalSlots} buổi',
                                 style: const TextStyle(
                                   fontSize: 12,
-                                  color: Color(0xFF64748B),
+                                  color: AppColors.textMuted,
                                 ),
                               ),
                             ],
@@ -330,7 +475,7 @@ class _SessionScreenState extends State<SessionScreen> {
                         Container(
                           height: 50,
                           width: 1,
-                          color: const Color(0xFFCCFBF1),
+                          color: AppColors.successSurface,
                         ),
                         const SizedBox(width: 16),
                         Expanded(
@@ -352,118 +497,219 @@ class _SessionScreenState extends State<SessionScreen> {
           ),
         ),
         actions: [
-          FilledButton.tonal(
+          TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Đóng'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              unawaited(_editLiveAttendance(attendance));
+            },
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Sửa trạng thái'),
           ),
         ],
       ),
     );
   }
 
+  Future<({AttendanceStatus status, String reason})?> _attendanceChangeDialog(
+    LiveStudentAttendance attendance,
+  ) {
+    var selected =
+        attendance.status == AttendanceStatus.notYetOpen ||
+            attendance.status == AttendanceStatus.pending
+        ? AttendanceStatus.absent
+        : attendance.status;
+    var reason = '';
+    return showDialog<({AttendanceStatus status, String reason})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Cập nhật trạng thái điểm danh'),
+          content: SizedBox(
+            width: appDialogWidth(context, 440),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${attendance.displayName} · Buổi ${widget.session.slot}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Hiện tại: ${_attendanceStatusLabel(attendance.status)}',
+                  style: const TextStyle(color: AppColors.textMuted),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<AttendanceStatus>(
+                  initialValue: selected,
+                  decoration: const InputDecoration(
+                    labelText: 'Trạng thái mới',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: AttendanceStatus.present,
+                      child: Text('Có mặt'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.absent,
+                      child: Text('Vắng'),
+                    ),
+                    DropdownMenuItem(
+                      value: AttendanceStatus.excused,
+                      child: Text('Có phép'),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setDialogState(() => selected = value);
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  autofocus: true,
+                  maxLength: 300,
+                  onChanged: (value) => setDialogState(() => reason = value),
+                  decoration: const InputDecoration(
+                    labelText: 'Lý do bắt buộc',
+                    hintText: 'Ví dụ: Giảng viên xác nhận có mặt',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Hủy'),
+            ),
+            FilledButton(
+              onPressed: reason.trim().length < 3
+                  ? null
+                  : () => Navigator.pop(dialogContext, (
+                      status: selected,
+                      reason: reason.trim(),
+                    )),
+              child: const Text('Lưu thay đổi'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editLiveAttendance(LiveStudentAttendance attendance) async {
+    final change = await _attendanceChangeDialog(attendance);
+    if (change == null || !mounted) return;
+    try {
+      final result = await widget.api.adjustAttendance(
+        courseClassId: widget.session.courseClassId,
+        slot: widget.session.slot,
+        studentId: attendance.student.id,
+        status: change.status,
+        reason: change.reason,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.synced
+                ? 'Đã cập nhật trạng thái điểm danh và Google Sheets.'
+                : 'Đã lưu trạng thái điểm danh; chờ đồng bộ Google Sheets: ${result.syncError}',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Cập nhật chưa hoàn tất: $error')));
+    }
+  }
+
+  String _attendanceStatusLabel(AttendanceStatus status) => switch (status) {
+    AttendanceStatus.present => 'Có mặt',
+    AttendanceStatus.absent => 'Vắng',
+    AttendanceStatus.excused => 'Có phép',
+    AttendanceStatus.notYetOpen => 'Chưa điểm danh',
+    AttendanceStatus.pending => 'Chưa điểm danh',
+  };
+
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
     return PopScope(
-      canPop: false,
+      canPop: _stopCompleted,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF8FAFC),
+        backgroundColor: AppColors.canvas,
         appBar: AppBar(
           automaticallyImplyLeading: false,
           elevation: 0,
-          backgroundColor: Colors.white,
-          foregroundColor: const Color(0xFF0F172A),
-          title: Row(
+          toolbarHeight: 68,
+          backgroundColor: AppColors.surface,
+          foregroundColor: AppColors.text,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF1F5F9),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.qr_code_2_rounded,
-                      size: 20,
-                      color: Color(0xFF0F766E),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${session.subject} · ${session.classCode}',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF0F172A),
-                      ),
-                    ),
-                  ],
-                ),
+              Text(
+                '${session.subject} · ${session.classCode}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
               ),
-              const SizedBox(width: 12),
-              Flexible(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE0F2FE),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · Slot ${session.daySlot ?? '—'} · ${_formatDate(session.date)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF0369A1),
-                    ),
-                  ),
+              const SizedBox(height: AppSpace.xs),
+              Text(
+                'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · Slot ${session.daySlot ?? '—'} · ${_formatDate(session.date)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted,
                 ),
               ),
             ],
           ),
           actions: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: FilledButton.tonalIcon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFF0FDFA),
-                  foregroundColor: const Color(0xFF0F766E),
-                ),
-                onPressed: _openFullscreenQr,
-                icon: const Icon(Icons.fullscreen, size: 20),
-                label: const Text(
-                  'Phóng to QR',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Padding(
-              padding: const EdgeInsets.only(right: 20, top: 8, bottom: 8),
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFE11D48),
-                  foregroundColor: Colors.white,
-                ),
+            if (MediaQuery.sizeOf(context).width < 600)
+              IconButton(
+                tooltip: _stopping
+                    ? 'Đang ngừng điểm danh…'
+                    : 'Ngừng điểm danh',
                 onPressed: _stopping ? null : _stop,
                 icon: _stopping
                     ? const SizedBox.square(
                         dimension: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.stop_circle_outlined, size: 20),
-                label: const Text(
-                  'Ngừng điểm danh',
-                  style: TextStyle(fontWeight: FontWeight.w700),
+                    : const Icon(Icons.stop_circle_outlined),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(right: 16, top: 12, bottom: 12),
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.error,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _stopping ? null : _stop,
+                  icon: _stopping
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.stop_circle_outlined, size: 20),
+                  label: Text(
+                    _stopping ? 'Đang ngừng điểm danh…' : 'Ngừng điểm danh',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
-            ),
           ],
         ),
         body: StreamBuilder<LiveAttendanceState>(
@@ -473,7 +719,7 @@ class _SessionScreenState extends State<SessionScreen> {
 
             return LayoutBuilder(
               builder: (context, constraints) {
-                final isDesktopWide = constraints.maxWidth >= 960;
+                final isDesktopWide = constraints.maxWidth >= 1160;
 
                 if (isDesktopWide) {
                   return Padding(
@@ -490,9 +736,7 @@ class _SessionScreenState extends State<SessionScreen> {
                         ),
                         const SizedBox(width: 24),
                         // Cột phải: Command Center (chiếm ~70% trung tâm)
-                        Expanded(
-                          child: _buildMainContent(context, state),
-                        ),
+                        Expanded(child: _buildMainContent(context, state)),
                       ],
                     ),
                   );
@@ -503,7 +747,13 @@ class _SessionScreenState extends State<SessionScreen> {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      _buildControlSidePanel(context),
+                      Align(
+                        alignment: Alignment.topLeft,
+                        child: SizedBox(
+                          width: min(340, constraints.maxWidth - 32),
+                          child: _buildControlSidePanel(context),
+                        ),
+                      ),
                       const SizedBox(height: 20),
                       SizedBox(
                         height: 600,
@@ -528,12 +778,6 @@ class _SessionScreenState extends State<SessionScreen> {
       children: [
         // Card QR động
         Card(
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFFE2E8F0)),
-          ),
-          color: Colors.white,
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -544,7 +788,7 @@ class _SessionScreenState extends State<SessionScreen> {
                     const Icon(
                       Icons.fiber_manual_record,
                       size: 12,
-                      color: Color(0xFF10B981),
+                      color: AppColors.success,
                     ),
                     const SizedBox(width: 5),
                     const Text(
@@ -552,47 +796,65 @@ class _SessionScreenState extends State<SessionScreen> {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: Color(0xFF0F766E),
+                        color: AppColors.primary,
                       ),
                     ),
                     const Spacer(),
-                    ValueListenableBuilder<int>(
-                      valueListenable: _secondsLeftNotifier,
-                      builder: (context, seconds, _) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'Đổi sau: ${seconds.toString().padLeft(2, '0')}s',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF475569),
+                    if (_qr == null)
+                      const Text(
+                        'Đang thử lại',
+                        style: TextStyle(
+                          color: AppColors.warning,
+                          fontSize: 12,
+                        ),
+                      )
+                    else
+                      ValueListenableBuilder<int>(
+                        valueListenable: _secondsLeftNotifier,
+                        builder: (context, seconds, _) {
+                          return Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
                             ),
-                          ),
-                        );
-                      },
-                    ),
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceMuted,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Đổi sau: ${seconds.toString().padLeft(2, '0')}s',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                   ],
                 ),
                 const SizedBox(height: 12),
                 // QR Container
                 if (_qr == null)
-                  const SizedBox.square(
+                  SizedBox.square(
                     dimension: 210,
                     child: Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          CircularProgressIndicator(strokeWidth: 3),
-                          SizedBox(height: 12),
-                          Text('Đang nạp mã QR…'),
+                          const Icon(
+                            Icons.qr_code_2_outlined,
+                            size: 54,
+                            color: AppColors.textMuted,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _error == null
+                                ? 'Đang tạo QR…'
+                                : 'Đang kết nối lại — tạm ngừng quét',
+                            textAlign: TextAlign.center,
+                          ),
                         ],
                       ),
                     ),
@@ -603,7 +865,7 @@ class _SessionScreenState extends State<SessionScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                      border: Border.all(color: AppColors.border),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 0.04),
@@ -620,22 +882,36 @@ class _SessionScreenState extends State<SessionScreen> {
                     ),
                   ),
                 const SizedBox(height: 12),
+                if (_qr != null)
+                  ValueListenableBuilder<int>(
+                    valueListenable: _qrValidityLeftNotifier,
+                    builder: (context, seconds, _) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'QR còn hiệu lực: ${seconds}s',
+                        style: const TextStyle(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
                 // Nút Phóng to QR
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF0F766E),
-                      side: const BorderSide(color: Color(0xFF0F766E)),
+                      foregroundColor: AppColors.primary,
+                      side: const BorderSide(color: AppColors.primary),
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
                     ),
-                    onPressed: _openFullscreenQr,
+                    onPressed: _qr == null ? null : _openFullscreenQr,
                     icon: const Icon(Icons.fullscreen, size: 20),
                     label: const Text(
-                      'Phóng to cho máy chiếu',
+                      'Phóng to QR',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -646,22 +922,22 @@ class _SessionScreenState extends State<SessionScreen> {
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 11,
-                    color: Color(0xFF64748B),
+                    color: AppColors.textMuted,
                   ),
                 ),
-                if (_error != null) ...[
+                if (_error != null || _stopError != null) ...[
                   const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFE4E6),
+                      color: AppColors.errorSurface,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      _error!,
+                      _stopError ?? _error!,
                       style: const TextStyle(
                         fontSize: 12,
-                        color: Color(0xFFE11D48),
+                        color: AppColors.error,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -672,14 +948,93 @@ class _SessionScreenState extends State<SessionScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        // Card thông tin nhanh
         Card(
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFFE2E8F0)),
+            side: const BorderSide(color: AppColors.border),
           ),
-          color: Colors.white,
+          color: AppColors.successSurface,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                const Icon(Icons.key_rounded, color: AppColors.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Checkout code',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      SelectableText(
+                        _checkoutCode.isEmpty ? '—' : _checkoutCode,
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 3,
+                          color: AppColors.primaryDark,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      ValueListenableBuilder<int>(
+                        valueListenable: _checkoutSecondsLeftNotifier,
+                        builder: (context, seconds, _) => Text(
+                          'Code mới sau ${seconds.toString().padLeft(2, '0')} giây',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ),
+                      if (_checkoutError != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          _checkoutError!,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.error,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Sao chép checkout code',
+                  onPressed: _checkoutCode.isEmpty
+                      ? null
+                      : () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: _checkoutCode),
+                          );
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Đã sao chép checkout code.'),
+                            ),
+                          );
+                        },
+                  icon: const Icon(
+                    Icons.copy_rounded,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Card thông tin nhanh
+        Card(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Column(
@@ -688,16 +1043,16 @@ class _SessionScreenState extends State<SessionScreen> {
                   icon: Icons.calendar_today_outlined,
                   label: 'Ngày học',
                   value: _formatDate(session.date),
-                  badgeColor: const Color(0xFFF1F5F9),
-                  textColor: const Color(0xFF334155),
+                  badgeColor: AppColors.surfaceMuted,
+                  textColor: AppColors.text,
                 ),
                 const SizedBox(height: 6),
                 _InfoRowSimple(
                   icon: Icons.access_time_outlined,
                   label: 'Ca học',
                   value: 'Slot ${session.daySlot ?? '—'}',
-                  badgeColor: const Color(0xFFE0F2FE),
-                  textColor: const Color(0xFF0369A1),
+                  badgeColor: AppColors.infoSurface,
+                  textColor: AppColors.info,
                 ),
                 const SizedBox(height: 6),
                 _InfoRowSimple(
@@ -705,8 +1060,8 @@ class _SessionScreenState extends State<SessionScreen> {
                   label: 'Tiến độ môn',
                   value:
                       'Buổi ${session.slot} / ${session.slotCount > 0 ? session.slotCount : '?'}',
-                  badgeColor: const Color(0xFFCCFBF1),
-                  textColor: const Color(0xFF0F766E),
+                  badgeColor: AppColors.successSurface,
+                  textColor: AppColors.primary,
                 ),
               ],
             ),
@@ -719,12 +1074,6 @@ class _SessionScreenState extends State<SessionScreen> {
   /// Khu vực nội dung chính chiếm 70% trung tâm
   Widget _buildMainContent(BuildContext context, LiveAttendanceState state) {
     return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: Color(0xFFE2E8F0)),
-      ),
-      color: Colors.white,
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -736,9 +1085,7 @@ class _SessionScreenState extends State<SessionScreen> {
           _buildSearchAndFilterBar(state),
           const Divider(height: 1),
           // Bảng danh sách sinh viên
-          Expanded(
-            child: _buildStudentListBody(state),
-          ),
+          Expanded(child: _buildStudentListBody(state)),
         ],
       ),
     );
@@ -753,7 +1100,7 @@ class _SessionScreenState extends State<SessionScreen> {
           children: [
             Text(
               'Đang chuẩn bị dữ liệu lớp học…',
-              style: TextStyle(color: Color(0xFF64748B)),
+              style: TextStyle(color: AppColors.textMuted),
             ),
           ],
         ),
@@ -780,8 +1127,8 @@ class _SessionScreenState extends State<SessionScreen> {
                         label: 'Tổng số sinh viên',
                         count: '${stats.totalActive}',
                         icon: Icons.groups_outlined,
-                        color: const Color(0xFF0F766E),
-                        bgColor: const Color(0xFFF0FDFA),
+                        color: AppColors.primary,
+                        bgColor: AppColors.successSurface,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -790,8 +1137,8 @@ class _SessionScreenState extends State<SessionScreen> {
                         label: 'Đã điểm danh',
                         count: '${stats.presentCount}',
                         icon: Icons.check_circle_outline_rounded,
-                        color: const Color(0xFF059669),
-                        bgColor: const Color(0xFFECFDF5),
+                        color: AppColors.success,
+                        bgColor: AppColors.successSurface,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -800,8 +1147,8 @@ class _SessionScreenState extends State<SessionScreen> {
                         label: 'Chưa điểm danh',
                         count: '${stats.notYetOpenCount}',
                         icon: Icons.pending_outlined,
-                        color: const Color(0xFFD97706),
-                        bgColor: const Color(0xFFFFFBEB),
+                        color: AppColors.warning,
+                        bgColor: AppColors.warningSurface,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -810,8 +1157,8 @@ class _SessionScreenState extends State<SessionScreen> {
                         label: 'Có phép / Vắng',
                         count: '${stats.excusedCount + stats.absentCount}',
                         icon: Icons.event_busy_outlined,
-                        color: const Color(0xFF7C3AED),
-                        bgColor: const Color(0xFFF5F3FF),
+                        color: AppColors.info,
+                        bgColor: AppColors.infoSurface,
                       ),
                     ),
                   ],
@@ -826,32 +1173,32 @@ class _SessionScreenState extends State<SessionScreen> {
                       label: 'Tổng số sinh viên',
                       count: '${stats.totalActive}',
                       icon: Icons.groups_outlined,
-                      color: const Color(0xFF0F766E),
-                      bgColor: const Color(0xFFF0FDFA),
+                      color: AppColors.primary,
+                      bgColor: AppColors.successSurface,
                     ),
                     const SizedBox(width: 12),
                     _MetricCard(
                       label: 'Đã điểm danh',
                       count: '${stats.presentCount}',
                       icon: Icons.check_circle_outline_rounded,
-                      color: const Color(0xFF059669),
-                      bgColor: const Color(0xFFECFDF5),
+                      color: AppColors.success,
+                      bgColor: AppColors.successSurface,
                     ),
                     const SizedBox(width: 12),
                     _MetricCard(
                       label: 'Chưa điểm danh',
                       count: '${stats.notYetOpenCount}',
                       icon: Icons.pending_outlined,
-                      color: const Color(0xFFD97706),
-                      bgColor: const Color(0xFFFFFBEB),
+                      color: AppColors.warning,
+                      bgColor: AppColors.warningSurface,
                     ),
                     const SizedBox(width: 12),
                     _MetricCard(
                       label: 'Có phép / Vắng',
                       count: '${stats.excusedCount + stats.absentCount}',
                       icon: Icons.event_busy_outlined,
-                      color: const Color(0xFF7C3AED),
-                      bgColor: const Color(0xFFF5F3FF),
+                      color: AppColors.info,
+                      bgColor: AppColors.infoSurface,
                     ),
                   ],
                 ),
@@ -863,16 +1210,16 @@ class _SessionScreenState extends State<SessionScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF1F2),
+                color: AppColors.errorSurface,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFECDD3)),
+                border: Border.all(color: AppColors.border),
               ),
               child: Row(
                 children: [
                   const Icon(
                     Icons.sync_problem,
                     size: 18,
-                    color: Color(0xFFE11D48),
+                    color: AppColors.error,
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -880,14 +1227,14 @@ class _SessionScreenState extends State<SessionScreen> {
                       'Có lỗi đồng bộ Google Sheets ở một số lượt điểm danh.',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Color(0xFFE11D48),
+                        color: AppColors.error,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
                   TextButton.icon(
                     style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFFE11D48),
+                      foregroundColor: AppColors.error,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
                         vertical: 4,
@@ -922,9 +1269,9 @@ class _SessionScreenState extends State<SessionScreen> {
                   child: LinearProgressIndicator(
                     value: stats.rate,
                     minHeight: 8,
-                    backgroundColor: const Color(0xFFE2E8F0),
+                    backgroundColor: AppColors.border,
                     valueColor: const AlwaysStoppedAnimation<Color>(
-                      Color(0xFF059669),
+                      AppColors.success,
                     ),
                   ),
                 ),
@@ -935,7 +1282,7 @@ class _SessionScreenState extends State<SessionScreen> {
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF0F766E),
+                  color: AppColors.primary,
                 ),
               ),
             ],
@@ -961,52 +1308,31 @@ class _SessionScreenState extends State<SessionScreen> {
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-      color: const Color(0xFFF8FAFC),
+      color: AppColors.canvas,
       child: Row(
         children: [
           // Ô tìm kiếm
           Expanded(
             flex: 3,
-            child: SizedBox(
-              height: 38,
-              child: TextField(
-                onChanged: (val) => setState(() => _searchQuery = val),
-                decoration: InputDecoration(
-                  hintText: 'Tìm kiếm theo MSSV, Họ tên hoặc Email…',
-                  hintStyle: const TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF94A3B8),
-                  ),
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    size: 18,
-                    color: Color(0xFF64748B),
-                  ),
-                  suffixIcon: _searchQuery.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.clear, size: 16),
-                          onPressed: () => setState(() => _searchQuery = ''),
-                        )
-                      : null,
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: EdgeInsets.zero,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF0F766E),
-                      width: 1.5,
-                    ),
-                  ),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (val) => setState(() => _searchQuery = val),
+              decoration: InputDecoration(
+                hintText: 'Tìm mã, tên hoặc email',
+                prefixIcon: const Icon(
+                  Icons.search,
+                  size: 18,
+                  color: AppColors.textMuted,
                 ),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 16),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() => _searchQuery = '');
+                        },
+                      )
+                    : null,
               ),
             ),
           ),
@@ -1028,25 +1354,28 @@ class _SessionScreenState extends State<SessionScreen> {
                   _FilterChip(
                     label: 'Đã điểm danh ($presentCount)',
                     isSelected: _selectedFilter == AttendanceFilter.present,
-                    color: const Color(0xFF059669),
+                    color: AppColors.success,
                     onSelected: () => setState(
-                        () => _selectedFilter = AttendanceFilter.present),
+                      () => _selectedFilter = AttendanceFilter.present,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   _FilterChip(
                     label: 'Chưa điểm danh ($notYetCount)',
                     isSelected: _selectedFilter == AttendanceFilter.notYetOpen,
-                    color: const Color(0xFFD97706),
+                    color: AppColors.warning,
                     onSelected: () => setState(
-                        () => _selectedFilter = AttendanceFilter.notYetOpen),
+                      () => _selectedFilter = AttendanceFilter.notYetOpen,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   _FilterChip(
                     label: 'Vắng/Phép ($otherCount)',
                     isSelected: _selectedFilter == AttendanceFilter.other,
-                    color: const Color(0xFF7C3AED),
+                    color: AppColors.info,
                     onSelected: () => setState(
-                        () => _selectedFilter = AttendanceFilter.other),
+                      () => _selectedFilter = AttendanceFilter.other,
+                    ),
                   ),
                 ],
               ),
@@ -1068,7 +1397,7 @@ class _SessionScreenState extends State<SessionScreen> {
             SizedBox(height: 16),
             Text(
               'Đang tải danh sách lớp học…',
-              style: TextStyle(color: Color(0xFF64748B)),
+              style: TextStyle(color: AppColors.textMuted),
             ),
           ],
         ),
@@ -1076,53 +1405,18 @@ class _SessionScreenState extends State<SessionScreen> {
     }
 
     if (state is LiveAttendanceError) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.error_outline_rounded,
-                size: 48,
-                color: Color(0xFFE11D48),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                state.message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFFE11D48)),
-              ),
-            ],
-          ),
-        ),
+      return AppEmptyState(
+        icon: Icons.error_outline_rounded,
+        title: 'Không tải được điểm danh',
+        description: state.message,
       );
     }
 
     if (state is LiveAttendanceEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.people_outline_rounded,
-                size: 48,
-                color: Color(0xFF94A3B8),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                state.message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 16,
-                ),
-              ),
-            ],
-          ),
-        ),
+      return AppEmptyState(
+        icon: Icons.people_outline_rounded,
+        title: 'Chưa có sinh viên',
+        description: state.message,
       );
     }
 
@@ -1154,113 +1448,125 @@ class _SessionScreenState extends State<SessionScreen> {
     }).toList();
 
     if (filtered.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Text(
-            'Không tìm thấy sinh viên nào phù hợp với bộ lọc.',
-            style: TextStyle(color: Color(0xFF64748B), fontSize: 15),
-          ),
-        ),
+      return const AppEmptyState(
+        icon: Icons.filter_alt_off_outlined,
+        title: 'Không tìm thấy sinh viên',
+        description: 'Thử từ khóa hoặc trạng thái khác.',
       );
     }
 
-    // Hiển thị dạng bảng ảo hóa (ListView.builder) cho hiệu năng 60 FPS
-    return Column(
-      children: [
-        // Bảng header
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-          color: const Color(0xFFF1F5F9),
-          child: const Row(
+    // Giữ các cột thẳng hàng và cho phép cuộn ngang khi cửa sổ hẹp.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: max(720, constraints.maxWidth),
+          height: constraints.maxHeight,
+          child: Column(
             children: [
-              SizedBox(
-                width: 44,
-                child: Text(
-                  'STT',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    color: Color(0xFF475569),
-                  ),
+              // Bảng header
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 10,
+                ),
+                color: AppColors.surfaceMuted,
+                child: const Row(
+                  children: [
+                    SizedBox(
+                      width: 44,
+                      child: Text(
+                        'STT',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 110,
+                      child: Text(
+                        'MSSV',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Họ và tên',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 170,
+                      child: Center(
+                        child: Text(
+                          'Trạng thái',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 110,
+                      child: Center(
+                        child: Text(
+                          'Giờ quét',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 80,
+                      child: Text(
+                        'Sheets',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 40),
+                  ],
                 ),
               ),
-              SizedBox(
-                width: 110,
-                child: Text(
-                  'MSSV',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    color: Color(0xFF475569),
-                  ),
-                ),
-              ),
+              // Danh sách sinh viên
               Expanded(
-                flex: 3,
-                child: Text(
-                  'Họ và tên',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    color: Color(0xFF475569),
-                  ),
+                child: ListView.separated(
+                  itemCount: filtered.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final item = filtered[index];
+                    return _StudentListTile(
+                      index: index + 1,
+                      item: item,
+                      onTap: () => _showStudentDetail(item),
+                    );
+                  },
                 ),
               ),
-              SizedBox(
-                width: 150,
-                child: Text(
-                  'Trạng thái',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    color: Color(0xFF475569),
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: 110,
-                child: Text(
-                  'Giờ quét',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    color: Color(0xFF475569),
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: 80,
-                child: Text(
-                  'Sheets',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    color: Color(0xFF475569),
-                  ),
-                ),
-              ),
-              SizedBox(width: 40),
             ],
           ),
         ),
-        // Danh sách sinh viên
-        Expanded(
-          child: ListView.separated(
-            itemCount: filtered.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, index) {
-              final item = filtered[index];
-              return _StudentListTile(
-                index: index + 1,
-                item: item,
-                onTap: () => _showStudentDetail(item.student),
-              );
-            },
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -1281,270 +1587,153 @@ class _StudentListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final isRecent = item.isRecent;
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 400),
-      color: isRecent ? const Color(0xFFECFDF5) : Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      child: Row(
-        children: [
-          // STT
-          SizedBox(
-            width: 44,
-            child: Text(
-              index.toString().padLeft(2, '0'),
-              style: const TextStyle(
-                fontSize: 13,
-                color: Color(0xFF64748B),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          // MSSV
-          SizedBox(
-            width: 110,
-            child: Text(
-              item.studentCode.isEmpty ? '—' : item.studentCode,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-                color: Color(0xFF0F172A),
-              ),
-            ),
-          ),
-          // Họ tên & email
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        item.fullName.isEmpty
-                            ? item.email
-                            : item.fullName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight:
-                              isRecent ? FontWeight.w800 : FontWeight.w600,
-                          color: const Color(0xFF0F172A),
-                        ),
-                      ),
-                    ),
-                    if (isRecent) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF10B981),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'Vừa quét',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                Text(
-                  item.email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+    return Material(
+      color: isRecent ? AppColors.successSurface : AppColors.surface,
+      child: InkWell(
+        onTap: onTap,
+        hoverColor: AppColors.surfaceMuted,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          child: Row(
+            children: [
+              // STT
+              SizedBox(
+                width: 44,
+                child: Text(
+                  index.toString().padLeft(2, '0'),
                   style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF64748B),
+                    fontSize: 13,
+                    color: AppColors.textMuted,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ],
-            ),
-          ),
-          // Trạng thái điểm danh (Badge)
-          SizedBox(
-            width: 150,
-            child: _buildStatusBadge(item.status),
-          ),
-          // Giờ quét
-          SizedBox(
-            width: 110,
-            child: Text(
-              item.formattedCheckInTime,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: item.isPresent
-                    ? const Color(0xFF0F172A)
-                    : const Color(0xFF94A3B8),
               ),
-            ),
-          ),
-          // Trạng thái Google Sheets
-          SizedBox(
-            width: 80,
-            child: Center(
-              child: _buildSyncIcon(item.syncStatus, item.syncError),
-            ),
-          ),
-          // Nút xem chi tiết
-          SizedBox(
-            width: 40,
-            child: IconButton(
-              icon: const Icon(
-                Icons.chevron_right_rounded,
-                size: 20,
-                color: Color(0xFF94A3B8),
+              // MSSV
+              SizedBox(
+                width: 110,
+                child: Text(
+                  item.studentCode.isEmpty ? '—' : item.studentCode,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    color: AppColors.text,
+                  ),
+                ),
               ),
-              onPressed: onTap,
-              tooltip: 'Xem hồ sơ sinh viên',
-            ),
+              // Họ tên & email
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            item.fullName.isEmpty ? item.email : item.fullName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: isRecent
+                                  ? FontWeight.w800
+                                  : FontWeight.w600,
+                              color: AppColors.text,
+                            ),
+                          ),
+                        ),
+                        if (isRecent) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.success,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'Vừa quét',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Text(
+                      item.email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Trạng thái điểm danh (Badge)
+              SizedBox(
+                width: 170,
+                child: Center(
+                  child: AppAttendanceBadge(
+                    status: item.status,
+                    pendingLabel: 'Chưa điểm danh',
+                  ),
+                ),
+              ),
+              // Giờ quét
+              SizedBox(
+                width: 110,
+                child: Center(
+                  child: Text(
+                    item.formattedCheckInTime,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: item.isPresent
+                          ? AppColors.text
+                          : AppColors.textMuted,
+                    ),
+                  ),
+                ),
+              ),
+              // Trạng thái Google Sheets
+              SizedBox(
+                width: 80,
+                child: Center(
+                  child: _buildSyncIcon(item.syncStatus, item.syncError),
+                ),
+              ),
+              // Nút xem chi tiết
+              SizedBox(
+                width: 40,
+                child: IconButton(
+                  icon: const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: AppColors.textMuted,
+                  ),
+                  onPressed: onTap,
+                  tooltip: 'Xem hồ sơ sinh viên',
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
-    );
-  }
-
-  Widget _buildStatusBadge(AttendanceStatus status) {
-    Widget badge;
-    switch (status) {
-      case AttendanceStatus.present:
-        badge = Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFECFDF5),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFA7F3D0)),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.check_circle_rounded,
-                size: 14,
-                color: Color(0xFF059669),
-              ),
-              SizedBox(width: 4),
-              Text(
-                'Đã điểm danh',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF059669),
-                ),
-              ),
-            ],
-          ),
-        );
-        break;
-      case AttendanceStatus.notYetOpen:
-        badge = Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFFBEB),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFFDE68A)),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.hourglass_empty_rounded,
-                size: 14,
-                color: Color(0xFFD97706),
-              ),
-              SizedBox(width: 4),
-              Text(
-                'Chưa điểm danh',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFFD97706),
-                ),
-              ),
-            ],
-          ),
-        );
-        break;
-      case AttendanceStatus.excused:
-        badge = Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF5F3FF),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFDDD6FE)),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.verified_user_rounded,
-                size: 14,
-                color: Color(0xFF7C3AED),
-              ),
-              SizedBox(width: 4),
-              Text(
-                'Có phép',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF7C3AED),
-                ),
-              ),
-            ],
-          ),
-        );
-        break;
-      case AttendanceStatus.absent:
-        badge = Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFE4E6),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFFECDD3)),
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.cancel_rounded,
-                size: 14,
-                color: Color(0xFFE11D48),
-              ),
-              SizedBox(width: 4),
-              Text(
-                'Vắng mặt',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFFE11D48),
-                ),
-              ),
-            ],
-          ),
-        );
-        break;
-    }
-
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.centerLeft,
-      child: badge,
     );
   }
 
   Widget _buildSyncIcon(String? syncStatus, String? syncError) {
     if (syncStatus == null) {
-      return const Text('—', style: TextStyle(color: Color(0xFF94A3B8)));
+      return const Text('—', style: TextStyle(color: AppColors.textMuted));
     }
 
     if (syncStatus == 'synced') {
@@ -1553,7 +1742,7 @@ class _StudentListTile extends StatelessWidget {
         child: Icon(
           Icons.cloud_done_rounded,
           size: 18,
-          color: Color(0xFF059669),
+          color: AppColors.success,
         ),
       );
     }
@@ -1564,7 +1753,7 @@ class _StudentListTile extends StatelessWidget {
         child: const Icon(
           Icons.cloud_off_rounded,
           size: 18,
-          color: Color(0xFFE11D48),
+          color: AppColors.error,
         ),
       );
     }
@@ -1574,7 +1763,7 @@ class _StudentListTile extends StatelessWidget {
       child: Icon(
         Icons.cloud_upload_outlined,
         size: 18,
-        color: Color(0xFFD97706),
+        color: AppColors.warning,
       ),
     );
   }
@@ -1586,11 +1775,13 @@ class _FullscreenQrDialog extends StatelessWidget {
     required this.session,
     required this.qrNotifier,
     required this.countdownNotifier,
+    required this.validityNotifier,
   });
 
   final AttendanceSession session;
   final ValueNotifier<IssuedQr?> qrNotifier;
   final ValueNotifier<int> countdownNotifier;
+  final ValueNotifier<int> validityNotifier;
 
   @override
   Widget build(BuildContext context) {
@@ -1608,7 +1799,7 @@ class _FullscreenQrDialog extends StatelessWidget {
           child: Container(
             width: double.infinity,
             height: double.infinity,
-            color: const Color(0xFF0F172A).withValues(alpha: 0.96),
+            color: AppColors.text.withValues(alpha: 0.96),
             child: SafeArea(
               child: Column(
                 children: [
@@ -1637,7 +1828,7 @@ class _FullscreenQrDialog extends StatelessWidget {
                             Text(
                               'Buổi ${session.slot}${session.slotCount > 0 ? '/${session.slotCount}' : ''} · Slot ${session.daySlot ?? '—'} · ${session.date}',
                               style: const TextStyle(
-                                color: Color(0xFF94A3B8),
+                                color: AppColors.textMuted,
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -1660,7 +1851,7 @@ class _FullscreenQrDialog extends StatelessWidget {
                                   Text(
                                     'ESC để thoát',
                                     style: TextStyle(
-                                      color: Color(0xFF94A3B8),
+                                      color: AppColors.textMuted,
                                       fontSize: 12,
                                     ),
                                   ),
@@ -1670,8 +1861,9 @@ class _FullscreenQrDialog extends StatelessWidget {
                             const SizedBox(width: 12),
                             IconButton(
                               style: IconButton.styleFrom(
-                                backgroundColor:
-                                    Colors.white.withValues(alpha: 0.15),
+                                backgroundColor: Colors.white.withValues(
+                                  alpha: 0.15,
+                                ),
                               ),
                               icon: const Icon(
                                 Icons.close_rounded,
@@ -1699,8 +1891,23 @@ class _FullscreenQrDialog extends StatelessWidget {
                             valueListenable: qrNotifier,
                             builder: (context, qr, _) {
                               if (qr == null) {
-                                return const CircularProgressIndicator(
-                                  color: Colors.white,
+                                return const Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.qr_code_2_outlined,
+                                      size: 90,
+                                      color: Colors.white70,
+                                    ),
+                                    SizedBox(height: 16),
+                                    Text(
+                                      'Đang kết nối lại — tạm ngừng quét',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 22,
+                                      ),
+                                    ),
+                                  ],
                                 );
                               }
 
@@ -1714,8 +1921,9 @@ class _FullscreenQrDialog extends StatelessWidget {
                                       borderRadius: BorderRadius.circular(28),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.black
-                                              .withValues(alpha: 0.5),
+                                          color: Colors.black.withValues(
+                                            alpha: 0.5,
+                                          ),
                                           blurRadius: 40,
                                           spreadRadius: 8,
                                         ),
@@ -1730,6 +1938,18 @@ class _FullscreenQrDialog extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 24),
                                   ValueListenableBuilder<int>(
+                                    valueListenable: validityNotifier,
+                                    builder: (context, seconds, _) => Text(
+                                      'QR còn hiệu lực: ${seconds}s',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  ValueListenableBuilder<int>(
                                     valueListenable: countdownNotifier,
                                     builder: (context, seconds, _) {
                                       return Container(
@@ -1738,10 +1958,12 @@ class _FullscreenQrDialog extends StatelessWidget {
                                           vertical: 8,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: Colors.white
-                                              .withValues(alpha: 0.1),
-                                          borderRadius:
-                                              BorderRadius.circular(30),
+                                          color: Colors.white.withValues(
+                                            alpha: 0.1,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            30,
+                                          ),
                                         ),
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
@@ -1874,7 +2096,7 @@ class _FilterChip extends StatelessWidget {
     required this.label,
     required this.isSelected,
     required this.onSelected,
-    this.color = const Color(0xFF0F766E),
+    this.color = AppColors.primary,
   });
 
   final String label;
@@ -1892,16 +2114,14 @@ class _FilterChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: isSelected ? color : Colors.white,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isSelected ? color : const Color(0xFFCBD5E1),
-          ),
+          border: Border.all(color: isSelected ? color : AppColors.border),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 12,
             fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-            color: isSelected ? Colors.white : const Color(0xFF475569),
+            color: isSelected ? Colors.white : AppColors.textMuted,
           ),
         ),
       ),
@@ -1914,8 +2134,8 @@ class _InfoRowSimple extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
-    this.badgeColor = const Color(0xFFF1F5F9),
-    this.textColor = const Color(0xFF0F172A),
+    this.badgeColor = AppColors.surfaceMuted,
+    this.textColor = AppColors.text,
   });
 
   final IconData icon;
@@ -1929,9 +2149,9 @@ class _InfoRowSimple extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: AppColors.canvas,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: AppColors.border),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1939,14 +2159,14 @@ class _InfoRowSimple extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: const Color(0xFF0F766E)),
+              Icon(icon, size: 16, color: AppColors.primary),
               const SizedBox(width: 8),
               Text(
                 label,
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF64748B),
+                  color: AppColors.textMuted,
                 ),
               ),
             ],
@@ -1990,33 +2210,30 @@ class _StudentInfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 20, color: const Color(0xFF0F766E)),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 100,
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            Expanded(
-              child: SelectableText(
-                value.isEmpty ? '—' : value,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                  color: Color(0xFF0F172A),
-                ),
-              ),
-            ),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20, color: AppColors.primary),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 100,
+          child: Text(
+            label,
+            style: const TextStyle(color: AppColors.textMuted, fontSize: 13),
+          ),
         ),
-      );
+        Expanded(
+          child: SelectableText(
+            value.isEmpty ? '—' : value,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: AppColors.text,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }

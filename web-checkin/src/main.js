@@ -1,21 +1,22 @@
 import { initializeApp } from 'firebase/app';
 import {
-  browserSessionPersistence,
+  browserLocalPersistence,
   getAuth,
-  GoogleAuthProvider,
+  inMemoryPersistence,
   onAuthStateChanged,
   setPersistence,
-  signInWithRedirect,
   signOut,
 } from 'firebase/auth';
 import {
   doc,
-  getDoc,
   getFirestore,
   runTransaction,
   serverTimestamp,
 } from 'firebase/firestore';
 import './style.css';
+import { duplicatePresentation } from './duplicate_status.js';
+import { googleSignInError, signInWithGoogle } from './google_sign_in.js';
+import { signInBrowserProblem } from './browser_environment.js';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -26,26 +27,113 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
+// Đồng bộ sang authDomain (firebaseapp.com) nếu đang mở trên .web.app để tránh Safari iOS chặn cookie chéo miền
+if (typeof window !== 'undefined' && window.location.hostname.endsWith('.web.app') && firebaseConfig.authDomain) {
+  const targetHost = firebaseConfig.authDomain;
+  if (targetHost && targetHost !== window.location.hostname) {
+    window.location.replace(`https://${targetHost}${window.location.pathname}${window.location.search}${window.location.hash}`);
+  }
+}
+
 const title = document.querySelector('#title');
 const message = document.querySelector('#message');
 const status = document.querySelector('#status');
+const announcement = document.querySelector('#announcement');
 const signInButton = document.querySelector('#sign-in');
+const browserHelp = document.querySelector('#browser-help');
+const copyLinkButton = document.querySelector('#copy-link');
+const copyLinkStatus = document.querySelector('#copy-link-status');
+const checkoutForm = document.querySelector('#checkout-form');
+const checkoutCodeInput = document.querySelector('#checkout-code');
+const codeError = document.querySelector('#code-error');
+const checkoutSubmitButton = document.querySelector('#checkout-submit');
+const switchAccountButton = document.querySelector('#switch-account');
 const params = new URLSearchParams(window.location.search);
+const leaveClassId = params.get('leave');
 const urlToken = params.get('t');
-if (urlToken) sessionStorage.setItem('attendanceQrToken', urlToken);
-const token = urlToken || sessionStorage.getItem('attendanceQrToken');
+if (urlToken) {
+  try { sessionStorage.setItem('attendanceQrToken', urlToken); } catch (_) {}
+  try { localStorage.setItem('attendanceQrToken', urlToken); } catch (_) {}
+}
+const token = urlToken ||
+  (() => { try { return sessionStorage.getItem('attendanceQrToken'); } catch (_) { return null; } })() ||
+  (() => { try { return localStorage.getItem('attendanceQrToken'); } catch (_) { return null; } })();
+
+function clearToken() {
+  try { sessionStorage.removeItem('attendanceQrToken'); } catch (_) {}
+  try { localStorage.removeItem('attendanceQrToken'); } catch (_) {}
+}
 
 let auth;
 let db;
 let submitStarted = false;
 
-function showStatus(kind, heading, detail) {
+function setCodeError(text = '') {
+  codeError.textContent = text;
+  checkoutCodeInput.setAttribute('aria-invalid', text ? 'true' : 'false');
+}
+
+function showStatus(kind, heading, detail, { allowCheckout = false, allowSignIn = false } = {}) {
   title.textContent = heading;
   message.textContent = detail;
+  announcement.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  announcement.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  announcement.textContent = `${heading}. ${detail}`;
   status.className = `status ${kind}`;
-  status.textContent = kind === 'success' ? '✓' : kind === 'error' ? '!' : '…';
-  signInButton.classList.add('hidden');
+  status.textContent = kind === 'success' ? '✓' : kind === 'info' ? 'i' : kind === 'loading' ? '…' : '!';
+  signInButton.classList.toggle('hidden', !allowSignIn);
+  browserHelp.classList.toggle('hidden', !allowSignIn);
+  checkoutForm.classList.toggle('hidden', !allowCheckout);
+  if (kind !== 'loading') {
+    if (allowCheckout) checkoutCodeInput.focus();
+    else if (allowSignIn) signInButton.focus();
+    else title.focus();
+  }
 }
+
+function promptCheckoutCode(user) {
+  title.textContent = 'Nhập mã xác nhận';
+  message.textContent = `Đã đăng nhập bằng ${user.email ?? 'tài khoản Google'}. Hãy dùng email đã đăng ký với lớp, rồi nhập mã giảng viên cung cấp.`;
+  setCodeError();
+  status.className = 'status hidden';
+  status.textContent = '';
+  announcement.textContent = '';
+  signInButton.classList.add('hidden');
+  browserHelp.classList.add('hidden');
+  checkoutForm.classList.remove('hidden');
+  checkoutCodeInput.focus();
+}
+
+copyLinkButton.addEventListener('click', async () => {
+  const destination = new URL(window.location.href);
+  if (token && !leaveClassId) destination.searchParams.set('t', token);
+  const link = destination.href;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard-unavailable');
+    await navigator.clipboard.writeText(link);
+    copyLinkStatus.textContent = 'Đã sao chép. Hãy dán liên kết vào Chrome hoặc Safari.';
+  } catch (_) {
+    const input = document.createElement('textarea');
+    input.value = link;
+    input.setAttribute('readonly', '');
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.append(input);
+    let copied = false;
+    try {
+      input.select();
+      input.setSelectionRange(0, input.value.length);
+      copied = document.execCommand('copy');
+    } catch (_) {
+      // Show the link below so it can still be copied manually.
+    } finally {
+      input.remove();
+    }
+    copyLinkStatus.textContent = copied
+      ? 'Đã sao chép. Hãy dán liên kết vào Chrome hoặc Safari.'
+      : `Không thể sao chép tự động. Hãy dùng menu để mở bằng trình duyệt hoặc sao chép liên kết này: ${link}`;
+  }
+});
 
 function readableError(error, userEmail = '') {
   const msg = error?.message || String(error || '');
@@ -70,133 +158,199 @@ function readableError(error, userEmail = '') {
   if (msg === 'google-account-has-no-email' || msg.includes('google-account-has-no-email')) {
     return 'Tài khoản Google của bạn không cung cấp địa chỉ email.';
   }
+  if (msg.includes('checkout-code-invalid')) {
+    return 'Mã xác nhận chưa đúng. Hãy kiểm tra lại với giảng viên rồi thử lại.';
+  }
+  if (msg.includes('checkout-code-expired')) {
+    return 'Mã xác nhận vừa hết hạn. Hãy lấy mã mới nhất trên màn hình giảng viên.';
+  }
+  if (msg.includes('qr-expired')) {
+    return 'QR đã hết hạn. Hãy quét lại mã mới nhất trên màn hình giảng viên.';
+  }
+  if (msg.includes('checkin-state-changed')) {
+    return 'QR, mã xác nhận hoặc phiên điểm danh có thể đã thay đổi. Hãy quét QR mới nhất và thử lại; nếu vẫn lỗi, liên hệ giảng viên.';
+  }
+  if (msg.includes('student-email-mismatch')) {
+    return `Email Google (${userEmail || ''}) không khớp với email đã đăng ký trong danh sách lớp.`;
+  }
 
   const code = String(error?.code || '');
   if (code.includes('not-found')) return 'Mã QR không hợp lệ hoặc đã hết hạn.';
   if (code.includes('permission-denied')) {
-    return 'Không thể hoàn tất điểm danh. Mã QR có thể đã hết hạn hoặc phiên điểm danh đã kết thúc.';
+    return 'Tài khoản của bạn chưa đủ điều kiện điểm danh. Hãy kiểm tra email đăng nhập hoặc liên hệ giảng viên.';
   }
   return error?.message || 'Không thể hoàn tất điểm danh. Vui lòng quét lại mã QR.';
 }
 
-async function studentIdForEmail(email) {
-  const normalized = email.trim().toLowerCase();
-  const bytes = new TextEncoder().encode(normalized);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function submitCheckIn(user) {
+async function submitCheckIn(user, code) {
   if (submitStarted || !token) return;
   submitStarted = true;
-  showStatus('loading', 'Đang xác nhận…', `Đang kiểm tra ${user.email ?? 'tài khoản Google'}.`);
+  checkoutSubmitButton.disabled = true;
+  showStatus('loading', 'Đang xác nhận…', 'Đang kiểm tra mã xác nhận và ghi nhận điểm danh.');
 
   try {
-    const email = user.email;
-    if (!email) throw new Error('google-account-has-no-email');
-    const emailNormalized = email.trim().toLowerCase();
-    const studentId = await studentIdForEmail(emailNormalized);
+    if (!user.email) throw new Error('google-account-has-no-email');
+    const result = await writeCheckIn(user, code);
 
-    // 1. Pre-check QR token
-    const tokenReference = doc(db, 'qrTokens', token);
-    const tokenSnapshot = await getDoc(tokenReference);
-    if (!tokenSnapshot.exists()) {
-      throw new Error('qr-not-found');
-    }
-    const tokenData = tokenSnapshot.data();
-
-    // 2. Pre-check Session
-    const sessionReference = doc(db, 'attendanceSessions', tokenData.sessionId);
-    const sessionSnapshot = await getDoc(sessionReference);
-    if (!sessionSnapshot.exists()) {
-      throw new Error('session-not-found');
-    }
-    const session = sessionSnapshot.data();
-    if (session.status !== 'active') {
-      throw new Error('session-stopped');
-    }
-
-    // 3. Pre-check Student in Roster
-    const studentReference = doc(
-      db,
-      'courseClasses',
-      session.courseClassId,
-      'students',
-      studentId,
-    );
-    const studentSnapshot = await getDoc(studentReference);
-    if (!studentSnapshot.exists()) {
-      throw new Error('student-not-in-roster');
-    }
-    const student = studentSnapshot.data();
-    if (student.emailNormalized !== emailNormalized) {
-      throw new Error('student-email-mismatch');
-    }
-    if (student.active !== true) {
-      throw new Error('student-inactive');
-    }
-
-    // 4. Perform atomic Check-In in transaction
-    const result = await runTransaction(db, async (transaction) => {
-      const checkInReference = doc(
-        db,
-        'attendance',
-        session.courseClassId,
-        'slots',
-        session.slotKey,
-        'records',
-        studentId,
-      );
-      const existing = await transaction.get(checkInReference);
-      if (existing.exists()) {
-        return {
-          status: 'duplicate',
-          email,
-          attendanceStatus: existing.data().attendanceStatus,
-        };
-      }
-
-      transaction.set(checkInReference, {
-        ownerUid: session.ownerUid,
-        firebaseUid: user.uid,
-        studentId,
-        email,
-        emailNormalized,
-        studentCode: student.studentCode,
-        fullName: student.fullName,
-        sessionId: sessionSnapshot.id,
-        courseClassId: session.courseClassId,
-        subject: session.subject,
-        classCode: session.classCode,
-        slot: session.slot,
-        slotKey: session.slotKey,
-        date: session.date,
-        qrToken: token,
-        checkedInAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        syncStatus: 'pending',
-        attendanceStatus: 'present',
-        recordSource: 'qr',
-        updatedAt: serverTimestamp(),
-        updatedBy: user.uid,
-      });
-      return { status: 'valid', email };
-    });
-
-    sessionStorage.removeItem('attendanceQrToken');
+    clearToken();
     if (result.status === 'duplicate') {
-      const detail = result.attendanceStatus === 'excused'
-        ? `${result.email} đang được ghi nhận có phép cho slot này.`
-        : `${result.email} đã được ghi nhận trước đó cho slot này.`;
-      showStatus('success', 'Đã có trạng thái điểm danh', detail);
+      const presentation = duplicatePresentation(result.attendanceStatus, result.email);
+      showStatus(presentation.kind, presentation.title, presentation.detail);
     } else {
       showStatus('success', 'Điểm danh thành công', `${result.email} đã được ghi nhận.`);
     }
     await signOut(auth);
   } catch (error) {
     console.error(error);
-    showStatus('error', 'Không thể điểm danh', readableError(error, user?.email));
+    const errorMessage = String(error?.message || error);
+    if (errorMessage.includes('checkout-code-invalid')
+      || errorMessage.includes('checkout-code-expired')) {
+      submitStarted = false;
+      checkoutCodeInput.value = '';
+      showStatus(
+        'error',
+        errorMessage.includes('checkout-code-expired')
+          ? 'Mã xác nhận đã đổi'
+          : 'Mã xác nhận chưa đúng',
+        readableError(error, user?.email),
+        {
+          allowCheckout: true,
+        },
+      );
+      setCodeError(readableError(error, user?.email));
+      checkoutCodeInput.focus();
+      return;
+    }
+    if (errorMessage.includes('qr-expired')) {
+      clearToken();
+      showStatus('error', 'QR đã hết hạn', readableError(error, user?.email));
+      await signOut(auth).catch(() => undefined);
+      return;
+    }
+    if (errorMessage.includes('checkin-state-changed')) {
+      submitStarted = false;
+      showStatus('error', 'QR hoặc mã đã đổi', readableError(error, user?.email), {
+        allowCheckout: true,
+      });
+      return;
+    }
+    showStatus('error', 'Không thể điểm danh', readableError(error, user?.email), {
+      allowSignIn: true,
+    });
     await signOut(auth).catch(() => undefined);
+  } finally {
+    checkoutSubmitButton.disabled = false;
+  }
+}
+
+async function studentDocumentId(email) {
+  const normalizedEmail = email.trim().toLowerCase();
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(normalizedEmail),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+
+async function writeCheckIn(user, checkoutCode) {
+  const email = user.email.trim().toLowerCase();
+  const normalizedCode = checkoutCode.trim().toUpperCase();
+  if (!/^[A-Z0-9]{5}$/.test(normalizedCode)) {
+    throw new Error('checkout-code-invalid');
+  }
+
+  const studentId = await studentDocumentId(email);
+  let validationStage = 'qr';
+  try {
+    return await runTransaction(db, async (transaction) => {
+      const qrReference = doc(db, 'qrTokens', token);
+      const qrSnapshot = await transaction.get(qrReference);
+      if (!qrSnapshot.exists()) throw new Error('qr-not-found');
+      const qr = qrSnapshot.data();
+      if (typeof qr.sessionId !== 'string') throw new Error('qr-not-found');
+
+      validationStage = 'session';
+      const sessionReference = doc(db, 'attendanceSessions', qr.sessionId);
+      const sessionSnapshot = await transaction.get(sessionReference);
+      if (!sessionSnapshot.exists()) throw new Error('session-not-found');
+      const session = sessionSnapshot.data();
+      if (session.status !== 'active') throw new Error('session-stopped');
+
+      validationStage = 'roster';
+      const studentReference = doc(
+        db,
+        'courseClasses',
+        session.courseClassId,
+        'students',
+        studentId,
+      );
+      const studentSnapshot = await transaction.get(studentReference);
+      if (!studentSnapshot.exists()) throw new Error('student-not-in-roster');
+      const student = studentSnapshot.data();
+      if (student.emailNormalized !== email) {
+        throw new Error('student-email-mismatch');
+      }
+      if (student.active !== true) throw new Error('student-inactive');
+
+      validationStage = 'record';
+      const recordReference = doc(
+        db,
+        'attendance',
+        session.courseClassId,
+        'slots',
+        String(session.slotKey),
+        'records',
+        studentId,
+      );
+      const recordSnapshot = await transaction.get(recordReference);
+      if (recordSnapshot.exists()) {
+        return {
+          status: 'duplicate',
+          email,
+          attendanceStatus: recordSnapshot.data().attendanceStatus ?? 'present',
+        };
+      }
+
+      validationStage = 'checkout';
+      const now = serverTimestamp();
+      transaction.set(recordReference, {
+        ownerUid: session.ownerUid,
+        firebaseUid: user.uid,
+        studentId,
+        email: student.email,
+        emailNormalized: email,
+        studentCode: student.studentCode,
+        fullName: student.fullName,
+        sessionId: qr.sessionId,
+        courseClassId: session.courseClassId,
+        subject: session.subject,
+        classCode: session.classCode,
+        slot: session.slot,
+        slotKey: String(session.slotKey),
+        date: session.date,
+        qrToken: token,
+        checkoutCode: normalizedCode,
+        checkedInAt: now,
+        createdAt: now,
+        updatedAt: now,
+        updatedBy: user.uid,
+        syncStatus: 'pending',
+        revision: 1,
+        attendanceStatus: 'present',
+        recordSource: 'qr',
+      });
+      return { status: 'valid', email };
+    });
+  } catch (error) {
+    if (error?.code === 'permission-denied') {
+      if (validationStage === 'qr') throw new Error('qr-expired');
+      if (validationStage === 'session') throw new Error('session-stopped');
+      if (validationStage === 'roster') throw new Error('student-not-in-roster');
+      if (validationStage === 'checkout') throw new Error('checkin-state-changed');
+    }
+    throw error;
   }
 }
 
@@ -214,29 +368,90 @@ async function bootstrap() {
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  await setPersistence(auth, browserSessionPersistence);
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+  } catch (error) {
+    console.warn('Local auth persistence unavailable; using memory:', error);
+    await setPersistence(auth, inMemoryPersistence);
+  }
 
   onAuthStateChanged(auth, (user) => {
-    if (user) submitCheckIn(user);
+    if (user) promptCheckoutCode(user);
+  });
+
+  checkoutForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const user = auth.currentUser;
+    if (user) await submitCheckIn(user, checkoutCodeInput.value);
+  });
+
+  checkoutCodeInput.addEventListener('invalid', () => {
+    setCodeError('Mã xác nhận phải gồm đúng 5 ký tự chữ hoặc số.');
+  });
+  checkoutCodeInput.addEventListener('input', () => setCodeError());
+
+  switchAccountButton.addEventListener('click', async () => {
+    switchAccountButton.disabled = true;
+    try {
+      await signOut(auth);
+      submitStarted = false;
+      checkoutCodeInput.value = '';
+      setCodeError();
+      signInButton.disabled = false;
+      signInButton.textContent = 'Tiếp tục với Google';
+      showStatus('info', 'Chọn tài khoản khác', 'Đăng nhập bằng email Google đã đăng ký trong danh sách lớp.', {
+        allowSignIn: true,
+      });
+      signInButton.focus();
+    } catch (error) {
+      showStatus('error', 'Không thể đổi tài khoản', readableError(error), { allowCheckout: true });
+      switchAccountButton.focus();
+    } finally {
+      switchAccountButton.disabled = false;
+    }
   });
 
   signInButton.addEventListener('click', async () => {
     signInButton.disabled = true;
     signInButton.textContent = 'Đang mở Google…';
     try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      await signInWithRedirect(auth, provider);
+      const result = await signInWithGoogle(auth);
+      if (result?.user) promptCheckoutCode(result.user);
     } catch (error) {
       console.error(error);
       signInButton.disabled = false;
       signInButton.textContent = 'Tiếp tục với Google';
-      showStatus('error', 'Không mở được đăng nhập', 'Vui lòng quét lại QR và thử lại.');
+      if (auth.currentUser) {
+        promptCheckoutCode(auth.currentUser);
+        return;
+      }
+      showStatus('error', 'Không mở được đăng nhập', googleSignInError(error), {
+        allowSignIn: true,
+      });
+      browserHelp.classList.remove('hidden');
     }
   });
+  if (!auth.currentUser) {
+    signInButton.classList.remove('hidden');
+    browserHelp.classList.remove('hidden');
+  }
 }
 
-bootstrap().catch((error) => {
-  console.error(error);
-  showStatus('error', 'Lỗi khởi tạo', 'Không thể kết nối tới hệ thống điểm danh.');
-});
+const browserProblem = signInBrowserProblem(navigator.userAgent, () => window.sessionStorage);
+if ((token || leaveClassId) && browserProblem) {
+  showStatus('info', 'Mở bằng Chrome hoặc Safari', browserProblem === 'embedded'
+    ? 'Bạn đang mở trang trong ứng dụng. Hãy dùng menu của ứng dụng để mở liên kết bằng trình duyệt, rồi đăng nhập Google.'
+    : 'Trình duyệt không lưu được phiên đăng nhập. Hãy mở liên kết trong Chrome hoặc Safari với bộ nhớ trang web được cho phép.');
+  browserHelp.classList.remove('hidden');
+  copyLinkButton.focus();
+} else if (leaveClassId) {
+  import('./leave.js').then(({ startLeave }) => startLeave(firebaseConfig, leaveClassId)).catch((error) => {
+    console.error(error);
+    showStatus('error', 'Không thể mở trang xin nghỉ', 'Vui lòng thử lại hoặc liên hệ giảng viên.');
+  });
+} else {
+  bootstrap().catch((error) => {
+    console.error(error);
+    showStatus('error', 'Lỗi khởi tạo', 'Không thể kết nối tới hệ thống điểm danh.');
+  });
+}

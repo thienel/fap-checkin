@@ -10,11 +10,9 @@ import 'attendance_api.dart';
 /// Service phụ trách ghép realtime danh sách lớp (Roster) và lịch sử quét mã (CheckInRecords)
 /// cho màn hình điểm danh trực tiếp (Module 3).
 class LiveSessionService {
-  LiveSessionService({
-    FirebaseFirestore? firestore,
-    AttendanceApi? api,
-  })  : _customFirestore = firestore,
-        _customApi = api;
+  LiveSessionService({FirebaseFirestore? firestore, AttendanceApi? api})
+    : _customFirestore = firestore,
+      _customApi = api;
 
   final FirebaseFirestore? _customFirestore;
   final AttendanceApi? _customApi;
@@ -36,7 +34,8 @@ class LiveSessionService {
 
     if (activeStudents.isEmpty) {
       return const LiveAttendanceEmpty(
-        message: 'Lớp học hiện chưa có sinh viên nào trong danh sách hoạt động.',
+        message:
+            'Lớp học hiện chưa có sinh viên nào trong danh sách hoạt động.',
       );
     }
 
@@ -58,7 +57,7 @@ class LiveSessionService {
         joined.add(
           LiveStudentAttendance(
             student: student,
-            status: AttendanceStatus.notYetOpen,
+            status: AttendanceStatus.pending,
             checkedInAt: null,
             source: null,
             syncStatus: null,
@@ -125,24 +124,24 @@ class LiveSessionService {
         .collection('students')
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs
-          .map((doc) {
-            final data = doc.data();
-            return CourseStudent(
-              id: doc.id,
-              email: data['email'] as String? ?? '',
-              studentCode: data['studentCode'] as String? ?? '',
-              fullName: data['fullName'] as String? ?? '',
-              active: data['active'] as bool? ?? true,
-              attendancePolicy: data['attendancePolicy'] == 'alwaysExcused'
-                  ? AttendancePolicy.alwaysExcused
-                  : AttendancePolicy.normal,
-            );
-          })
-          .where((student) => student.active)
-          .toList()
-        ..sort((a, b) => a.studentCode.compareTo(b.studentCode));
-    });
+          return snapshot.docs
+              .map((doc) {
+                final data = doc.data();
+                return CourseStudent(
+                  id: doc.id,
+                  email: data['email'] as String? ?? '',
+                  studentCode: data['studentCode'] as String? ?? '',
+                  fullName: data['fullName'] as String? ?? '',
+                  active: data['active'] as bool? ?? true,
+                  attendancePolicy: data['attendancePolicy'] == 'alwaysExcused'
+                      ? AttendancePolicy.alwaysExcused
+                      : AttendancePolicy.normal,
+                );
+              })
+              .where((student) => student.active)
+              .toList()
+            ..sort((a, b) => a.studentCode.compareTo(b.studentCode));
+        });
   }
 
   /// Lắng nghe luồng dữ liệu hợp nhất (Roster + CheckIns) cho phiên điểm danh
@@ -195,42 +194,44 @@ class LiveSessionService {
       );
 
       // 2. Lắng nghe check-ins
-      checkInsSub = _api.watchSessionCheckIns(session).listen(
-        (records) {
-          // Phát hiện sinh viên mới check-in để tạo micro-animation highlight
-          for (final record in records) {
-            if (record.attendanceStatus == 'present' &&
-                !knownPresentIds.contains(record.studentId)) {
-              knownPresentIds.add(record.studentId);
-              recentIds.add(record.studentId);
+      checkInsSub = _api
+          .watchSessionCheckIns(session)
+          .listen(
+            (records) {
+              // Phát hiện sinh viên mới check-in để tạo micro-animation highlight
+              for (final record in records) {
+                if (record.attendanceStatus == 'present' &&
+                    !knownPresentIds.contains(record.studentId)) {
+                  knownPresentIds.add(record.studentId);
+                  recentIds.add(record.studentId);
 
-              // Huỷ timer cũ nếu có
-              recentTimers[record.studentId]?.cancel();
-              // Sau 6 giây tự động gỡ trạng thái recent để danh sách trở về thứ tự chuẩn
-              recentTimers[record.studentId] = Timer(
-                const Duration(seconds: 6),
-                () {
-                  recentIds.remove(record.studentId);
-                  recentTimers.remove(record.studentId);
-                  emitLatest();
-                },
-              );
-            }
-          }
+                  // Huỷ timer cũ nếu có
+                  recentTimers[record.studentId]?.cancel();
+                  // Sau 6 giây tự động gỡ trạng thái recent để danh sách trở về thứ tự chuẩn
+                  recentTimers[record.studentId] = Timer(
+                    const Duration(seconds: 6),
+                    () {
+                      recentIds.remove(record.studentId);
+                      recentTimers.remove(record.studentId);
+                      emitLatest();
+                    },
+                  );
+                }
+              }
 
-          currentRecords = records;
-          emitLatest();
-        },
-        onError: (error) {
-          if (!controller.isClosed) {
-            controller.add(
-              LiveAttendanceError(
-                message: 'Không thể tải lượt điểm danh: $error',
-              ),
-            );
-          }
-        },
-      );
+              currentRecords = records;
+              emitLatest();
+            },
+            onError: (error) {
+              if (!controller.isClosed) {
+                controller.add(
+                  LiveAttendanceError(
+                    message: 'Không thể tải lượt điểm danh: $error',
+                  ),
+                );
+              }
+            },
+          );
     }
 
     void onCancel() {

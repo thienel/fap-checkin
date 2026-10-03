@@ -244,20 +244,35 @@ export const checkIn = onCall(async (request) => {
   const email = String(request.auth.token.email ?? "").trim().toLowerCase();
   if (!email) throw new HttpsError("failed-precondition", "Tài khoản Google không có email.");
   const token = requiredString(request.data?.token, "token");
+  const checkoutCode = requiredString(request.data?.checkoutCode, "checkoutCode").toUpperCase();
+  if (!/^[A-Z0-9]{5}$/.test(checkoutCode)) {
+    throw new HttpsError("invalid-argument", "checkout-code-invalid");
+  }
   const tokenRef = db.collection("qrTokens").doc(token);
-  const now = Timestamp.now();
-
-  let checkInId = "";
-  let wasCreated = false;
+  let result: {status: "valid" | "duplicate"; email: string; attendanceStatus?: string} = {
+    status: "valid",
+    email,
+  };
   await db.runTransaction(async (transaction) => {
     const tokenSnapshot = await transaction.get(tokenRef);
     const tokenData = tokenSnapshot.data();
     if (!tokenSnapshot.exists || !tokenData) {
       throw new HttpsError("not-found", "QR không hợp lệ.");
     }
-    const expiresAt = tokenData.expiresAt as Timestamp;
-    if (now.toMillis() > expiresAt.toMillis()) {
-      throw new HttpsError("deadline-exceeded", "QR đã hết hạn. Hãy quét mã mới.");
+    if (typeof tokenData.sessionId !== "string") {
+      throw new HttpsError("not-found", "QR không hợp lệ.");
+    }
+    const issuedAt = tokenData.issuedAt;
+    const validitySeconds = tokenData.validitySeconds;
+    if (!(issuedAt instanceof Timestamp)
+      || typeof validitySeconds !== "number"
+      || !Number.isInteger(validitySeconds)
+      || validitySeconds < 2
+      || validitySeconds > 120) {
+      throw new HttpsError("failed-precondition", "QR không hợp lệ.");
+    }
+    if (Timestamp.now().toMillis() > issuedAt.toMillis() + validitySeconds * 1000) {
+      throw new HttpsError("deadline-exceeded", "qr-expired");
     }
 
     const sessionId = tokenData.sessionId as string;
@@ -268,32 +283,94 @@ export const checkIn = onCall(async (request) => {
       throw new HttpsError("failed-precondition", "Phiên điểm danh đã kết thúc.");
     }
 
-    checkInId = createHash("sha256")
-      .update(`${session.courseClassId}|${session.slot}|${email}`)
-      .digest("hex");
-    const checkInRef = db.collection("checkIns").doc(checkInId);
-    if ((await transaction.get(checkInRef)).exists) return;
+    const currentQrGeneration = session.currentQrGeneration;
+    if (tokenData.ownerUid !== session.ownerUid
+      || typeof tokenData.qrGeneration !== "number"
+      || typeof currentQrGeneration !== "number"
+      || tokenData.qrGeneration > currentQrGeneration) {
+      throw new HttpsError("deadline-exceeded", "qr-expired");
+    }
 
-    wasCreated = true;
-    transaction.create(checkInRef, {
-      email,
+    const checkoutRef = db.collection("attendanceCheckoutCodes").doc(sessionId);
+    const studentId = createHash("sha256").update(email).digest("hex");
+    const studentRef = db.collection("courseClasses")
+      .doc(String(session.courseClassId)).collection("students").doc(studentId);
+    const recordRef = db.collection("attendance")
+      .doc(String(session.courseClassId))
+      .collection("slots").doc(String(session.slotKey))
+      .collection("records").doc(studentId);
+    const checkoutSnapshot = await transaction.get(checkoutRef);
+    const studentSnapshot = await transaction.get(studentRef);
+    const recordSnapshot = await transaction.get(recordRef);
+    const checkout = checkoutSnapshot.data();
+    const checkoutRotationSeconds = checkout?.rotationSeconds;
+    const checkoutIssuedAt = checkout?.issuedAt;
+    if (!checkoutSnapshot.exists
+      || checkout?.ownerUid !== session.ownerUid
+      || checkout?.sessionId !== sessionId
+      || typeof checkoutRotationSeconds !== "number"
+      || !Number.isInteger(checkoutRotationSeconds)
+      || checkoutRotationSeconds < 10
+      || checkoutRotationSeconds > 3600
+      || !(checkoutIssuedAt instanceof Timestamp)) {
+      throw new HttpsError("failed-precondition", "checkout-code-expired");
+    }
+    if (Timestamp.now().toMillis()
+      > checkoutIssuedAt.toMillis() + checkoutRotationSeconds * 1000 + 3000) {
+      throw new HttpsError("deadline-exceeded", "checkout-code-expired");
+    }
+    if (checkout?.code !== checkoutCode) {
+      throw new HttpsError("invalid-argument", "checkout-code-invalid");
+    }
+
+    const student = studentSnapshot.data();
+    if (!studentSnapshot.exists || !student) {
+      throw new HttpsError("permission-denied", "student-not-in-roster");
+    }
+    if (student.emailNormalized !== email) {
+      throw new HttpsError("permission-denied", "student-email-mismatch");
+    }
+    if (student.active !== true) {
+      throw new HttpsError("permission-denied", "student-inactive");
+    }
+    if (recordSnapshot.exists) {
+      result = {
+        status: "duplicate",
+        email,
+        attendanceStatus: String(recordSnapshot.data()?.attendanceStatus ?? "present"),
+      };
+      return;
+    }
+
+    const now = FieldValue.serverTimestamp();
+    transaction.create(recordRef, {
+      ownerUid: session.ownerUid,
+      firebaseUid: request.auth!.uid,
+      studentId,
+      email: student.email,
+      emailNormalized: email,
+      studentCode: student.studentCode,
+      fullName: student.fullName,
       sessionId,
       courseClassId: session.courseClassId,
       subject: session.subject,
       classCode: session.classCode,
       slot: session.slot,
+      slotKey: session.slotKey,
       date: session.date,
+      qrToken: token,
       checkedInAt: now,
-      recordedAt: now,
-      syncStatus: "pending",
       createdAt: now,
+      updatedAt: now,
+      updatedBy: request.auth!.uid,
+      syncStatus: "pending",
+      attendanceStatus: "present",
+      recordSource: "qr",
     });
-    transaction.update(sessionRef, {attendanceCount: FieldValue.increment(1)});
+    result = {status: "valid", email};
   });
 
-  if (!wasCreated) return {status: "duplicate", email};
-  const synced = await syncCheckIn(checkInId);
-  return {status: "valid", email, sheetSync: synced ? "complete" : "pending"};
+  return result;
 });
 
 export const retrySheetSync = onSchedule("every 5 minutes", async () => {
