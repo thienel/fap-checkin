@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "students",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {"fieldPath": "emailNormalized", "order": "ASCENDING"},
+        {"fieldPath": "active", "order": "ASCENDING"}
+      ]
+    },
+    {
       "collectionGroup": "attendanceSessions",
       "queryScope": "COLLECTION",
       "fields": [

@@ -1,5 +1,7 @@
 # FAP Check Attendance — Firebase Spark
 
+Module mobile sinh viên nằm trong [`student-mobile/`](student-mobile/README.md). Build APK cài thử bằng `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/build_student_android.ps1`; hướng dẫn cấu hình Firebase Android, đăng nhập Google và test với desktop có trong README của module.
+
 Ứng dụng chạy hoàn toàn không cần Cloud Functions và dùng được với Firebase Spark:
 
 - Flutter Desktop điều khiển môn–lớp, phiên điểm danh và QR xoay vòng.

@@ -17,6 +17,23 @@ service cloud.firestore {
         && request.auth.token.email is string;
     }
 
+    function authEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function activeStudent(courseClassId, studentId) {
+      return isGoogleUser()
+        && studentData(courseClassId, studentId).emailNormalized == authEmail()
+        && studentData(courseClassId, studentId).active == true;
+    }
+
+    function enrolledIn(courseClassId) {
+      let access = get(/databases/$(database)/documents/courseClasses/$(courseClassId)/studentAccess/$(request.auth.uid)).data;
+      return isGoogleUser()
+        && access.emailNormalized == authEmail()
+        && activeStudent(courseClassId, access.studentId);
+    }
+
     function sessionData(sessionId) {
       return get(/databases/$(database)/documents/attendanceSessions/$(sessionId)).data;
     }
@@ -55,8 +72,8 @@ service cloud.firestore {
         && attendance.slotKey == slotKey
         && attendance.firebaseUid == request.auth.uid
         && attendance.updatedBy == request.auth.uid
-        && attendance.emailNormalized == request.auth.token.email
-        && student.emailNormalized == request.auth.token.email
+        && attendance.emailNormalized == authEmail()
+        && student.emailNormalized == authEmail()
         && student.active == true
         && attendance.email == student.email
         && attendance.studentCode == student.studentCode
@@ -128,10 +145,7 @@ service cloud.firestore {
           !exists(/databases/$(database)/documents/courseClasses/$(courseClassId))
           || resource.data.ownerUid == request.auth.uid
         )
-        || (isGoogleUser()
-          && exists(/databases/$(database)/documents/courseClasses/$(courseClassId)/studentAccess/$(request.auth.uid))
-          && get(/databases/$(database)/documents/courseClasses/$(courseClassId)/studentAccess/$(request.auth.uid)).data.emailNormalized == request.auth.token.email
-          && studentData(courseClassId, get(/databases/$(database)/documents/courseClasses/$(courseClassId)/studentAccess/$(request.auth.uid)).data.studentId).active == true);
+        || enrolledIn(courseClassId);
       allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
       allow create: if isTeacher()
         && request.resource.data.ownerUid == request.auth.uid
@@ -156,7 +170,8 @@ service cloud.firestore {
         // Student IDs are derived from email and can be guessed. A direct
         // lookup must also belong to the signed-in Google account.
         allow get: if (isGoogleUser()
-            && resource.data.emailNormalized == request.auth.token.email)
+            && resource.data.emailNormalized == authEmail()
+            && resource.data.active == true)
           || (isTeacher()
             && get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
               == request.auth.uid);
@@ -218,16 +233,16 @@ service cloud.firestore {
         allow create: if isGoogleUser()
           && uid == request.auth.uid
           && request.resource.data.keys().hasOnly(['studentId', 'emailNormalized', 'createdAt'])
-          && request.resource.data.emailNormalized == request.auth.token.email
+          && request.resource.data.emailNormalized == authEmail()
           && request.resource.data.studentId is string
           && request.resource.data.createdAt == request.time
-          && studentData(courseClassId, request.resource.data.studentId).emailNormalized == request.auth.token.email
+          && studentData(courseClassId, request.resource.data.studentId).emailNormalized == authEmail()
           && studentData(courseClassId, request.resource.data.studentId).active == true;
       }
 
       match /leaveRequests/{requestId} {
         allow get, list: if ownsCourse(courseClassId)
-          || (isGoogleUser() && resource.data.firebaseUid == request.auth.uid);
+          || (enrolledIn(courseClassId) && resource.data.firebaseUid == request.auth.uid);
         allow create: if isGoogleUser()
           && request.resource.data.keys().hasOnly([
             'ownerUid', 'courseClassId', 'studentId', 'firebaseUid',
@@ -236,10 +251,10 @@ service cloud.firestore {
           ])
           && request.resource.data.courseClassId == courseClassId
           && request.resource.data.firebaseUid == request.auth.uid
-          && request.resource.data.emailNormalized == request.auth.token.email
+          && request.resource.data.emailNormalized == authEmail()
           && request.resource.data.studentId is string
           && requestId == request.resource.data.studentId + '_' + string(request.resource.data.slot)
-          && studentData(courseClassId, request.resource.data.studentId).emailNormalized == request.auth.token.email
+          && studentData(courseClassId, request.resource.data.studentId).emailNormalized == authEmail()
           && studentData(courseClassId, request.resource.data.studentId).active == true
           && request.resource.data.ownerUid == get(/databases/$(database)/documents/courseClasses/$(courseClassId)).data.ownerUid
           && request.resource.data.slot is int
@@ -301,8 +316,11 @@ service cloud.firestore {
 
     match /attendanceSessions/{sessionId} {
       allow get: if (isTeacher() && resource.data.ownerUid == request.auth.uid)
-        || (isGoogleUser() && resource.data.status == 'active');
-      allow list: if isTeacher() && resource.data.ownerUid == request.auth.uid;
+        // Keep web check-in's QR bootstrap; history requires membership.
+        || (isGoogleUser() && resource.data.status == 'active')
+        || enrolledIn(resource.data.courseClassId);
+      allow list: if (isTeacher() && resource.data.ownerUid == request.auth.uid)
+        || enrolledIn(resource.data.courseClassId);
       allow create: if isTeacher()
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.status == 'active'
@@ -425,9 +443,8 @@ service cloud.firestore {
     }
 
     match /attendance/{courseClassId}/slots/{slotKey}/checkIns/{userId} {
-      allow get: if signedIn()
-        && (request.auth.uid == userId
-          || ownsCourse(courseClassId));
+      allow get: if ownsCourse(courseClassId)
+        || (enrolledIn(courseClassId) && request.auth.uid == userId);
       // The course ID is fixed by this collection path, so ownership can be
       // proven from the parent course without constraining every teacher query
       // by a record field. This enables slot overview and realtime roster reads.
@@ -449,9 +466,7 @@ service cloud.firestore {
     // converge here. Legacy checkIns above remain readable during migration.
     match /attendance/{courseClassId}/slots/{slotKey}/records/{studentId} {
       allow get: if ownsCourse(courseClassId)
-        || (isGoogleUser()
-          && studentData(courseClassId, studentId).emailNormalized
-            == request.auth.token.email);
+        || activeStudent(courseClassId, studentId);
       allow list: if ownsCourse(courseClassId);
 
       // Students can create their own canonical record only when the current
@@ -542,6 +557,15 @@ service cloud.firestore {
       allow delete: if isTeacher()
         && resource.data.ownerUid == request.auth.uid;
       allow update: if false;
+    }
+
+    // Roster is the enrollment source, including students added before login.
+    // No other students namespace is writable in this ruleset. Queries must
+    // filter by the caller's email AND active membership.
+    match /{path=**}/students/{studentId} {
+      allow list: if isGoogleUser()
+        && resource.data.emailNormalized == authEmail()
+        && resource.data.active == true;
     }
 
     match /{document=**} {

@@ -60,3 +60,11 @@ gemini.local.json
 danh_sach_sinh_vien.csv
 .firebase/
 firebase-debug.log
+student-mobile/build/
+student-mobile/coverage/
+student-mobile/firebase.mobile.json
+student-mobile/android/app/google-services.json
+student-mobile/ios/Runner/GoogleService-Info.plist
+student-mobile/android/key.properties
+student-mobile/android/*.jks
+artifacts/

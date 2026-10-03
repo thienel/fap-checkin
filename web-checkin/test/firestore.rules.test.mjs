@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { after, before, test } from 'node:test';
 
 import {
@@ -175,6 +176,173 @@ before(async () => {
 
 after(async () => {
   await testEnvironment?.cleanup();
+});
+
+test('mobile discovery requires own normalized email and active filter', async () => {
+  const db = testEnvironment.authenticatedContext('mobile-discovery', {
+    email: 'STUDENT1@FPT.EDU.VN', firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const group = collectionGroup(db, 'students');
+  await assertSucceeds(getDocs(query(group,
+    where('emailNormalized', '==', 'student1@fpt.edu.vn'), where('active', '==', true))));
+  await assertFails(getDocs(group));
+  await assertFails(getDocs(query(group, where('emailNormalized', '==', 'student1@fpt.edu.vn'))));
+  await assertFails(getDocs(query(group,
+    where('emailNormalized', '==', 'student2@fpt.edu.vn'), where('active', '==', true))));
+  for (const context of [testEnvironment.unauthenticatedContext(),
+    testEnvironment.authenticatedContext('password-user', {
+      email: 'student1@fpt.edu.vn', firebase: { sign_in_provider: 'password' },
+    })]) {
+    await assertFails(getDocs(query(collectionGroup(context.firestore(), 'students'),
+      where('emailNormalized', '==', 'student1@fpt.edu.vn'), where('active', '==', true))));
+  }
+  await assertFails(setDoc(doc(db, 'fake', 'course', 'students', 'forged'), {
+    emailNormalized: 'student1@fpt.edu.vn', active: true,
+  }));
+});
+
+test('mobile access allows closed-session queries and is revoked by inactive roster', async () => {
+  const id = 'MOBILE_ACCESS';
+  const uid = 'mobile-access';
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'courseClasses', id), { ownerUid: teacherUid, subject: 'TEST', classCode: 'MOB' });
+    await setDoc(doc(db, 'courseClasses', id, 'students', 'my-student'), {
+      emailNormalized: 'mobile@example.com', active: true,
+    });
+    await setDoc(doc(db, 'attendanceSessions', 'mobile-closed'), {
+      ownerUid: teacherUid, courseClassId: id, slot: 1, status: 'stopped',
+    });
+  });
+  const db = testEnvironment.authenticatedContext(uid, {
+    email: 'MOBILE@example.com', firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const access = doc(db, 'courseClasses', id, 'studentAccess', uid);
+  await assertFails(getDocs(query(collection(db, 'attendanceSessions'), where('courseClassId', '==', id))));
+  await assertSucceeds(setDoc(access, {
+    studentId: 'my-student', emailNormalized: 'mobile@example.com', createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(getDoc(doc(db, 'courseClasses', id)));
+  await assertSucceeds(getDocs(query(collection(db, 'attendanceSessions'), where('courseClassId', '==', id))));
+  await assertSucceeds(getDoc(doc(db, 'attendanceSessions', 'mobile-closed')));
+  await assertFails(getDocs(collection(db, 'attendanceSessions')));
+  await assertFails(getDocs(query(collection(db, 'attendanceSessions'), where('courseClassId', '==', courseClassId))));
+  await assertSucceeds(getDoc(doc(db, 'attendance', id, 'slots', '1', 'records', 'my-student')));
+  await assertSucceeds(getDoc(doc(db, 'attendance', id, 'slots', '1', 'checkIns', uid)));
+  await assertSucceeds(getDocs(query(collection(db, 'courseClasses', id, 'leaveRequests'), where('firebaseUid', '==', uid))));
+  await assertFails(getDoc(doc(db, 'attendanceCheckoutCodes', 'session-1')));
+  await assertFails(getDocs(collection(db, 'attendance', id, 'slots', '1', 'records')));
+  await assertFails(getDoc(doc(db, 'courseClasses', id, 'imports', 'private')));
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), 'courseClasses', id, 'students', 'my-student'), { active: false });
+  });
+  await assertFails(getDoc(doc(db, 'courseClasses', id)));
+  await assertFails(getDoc(doc(db, 'courseClasses', id, 'students', 'my-student')));
+  await assertFails(getDocs(query(collection(db, 'attendanceSessions'), where('courseClassId', '==', id))));
+  await assertFails(getDoc(doc(db, 'attendance', id, 'slots', '1', 'records', 'my-student')));
+  await assertFails(getDoc(doc(db, 'attendance', id, 'slots', '1', 'checkIns', uid)));
+  await assertFails(getDocs(query(collection(db, 'courseClasses', id, 'leaveRequests'), where('firebaseUid', '==', uid))));
+});
+
+test('mobile access cannot claim another student or another UID', async () => {
+  const uid = 'mobile-forger';
+  const db = testEnvironment.authenticatedContext(uid, {
+    email: 'student1@fpt.edu.vn', firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  await assertFails(setDoc(doc(db, 'courseClasses', courseClassId, 'studentAccess', uid), {
+    studentId: 'student-hash-2', emailNormalized: 'student1@fpt.edu.vn', createdAt: serverTimestamp(),
+  }));
+  await assertFails(setDoc(doc(db, 'courseClasses', courseClassId, 'studentAccess', 'another-uid'), {
+    studentId: 'student-hash-1', emailNormalized: 'student1@fpt.edu.vn', createdAt: serverTimestamp(),
+  }));
+});
+
+test('mobile discovers classes assigned before first login across teachers and terms', async () => {
+  const email = 'multicourse@example.com';
+  const studentId = createHash('sha256').update(email).digest('hex');
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    const admin = context.firestore();
+    for (const [id, ownerUid, academicTerm, active] of [
+      ['MOBILE_TERM_A', teacherUid, '2026-SUMMER', true],
+      ['MOBILE_TERM_B', otherTeacherUid, '2026-FALL', true],
+      ['MOBILE_TERM_INACTIVE', teacherUid, '2026-FALL', false],
+    ]) {
+      await setDoc(doc(admin, 'courseClasses', id), { ownerUid, academicTerm, subject: 'PRM393', classCode: 'SE1910' });
+      await setDoc(doc(admin, 'courseClasses', id, 'students', studentId), { emailNormalized: email, active });
+    }
+  });
+  const db = testEnvironment.authenticatedContext('first-mobile-login', {
+    email: 'MULTICOURSE@example.com', firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const results = await assertSucceeds(getDocs(query(collectionGroup(db, 'students'),
+    where('emailNormalized', '==', email), where('active', '==', true))));
+  const ids = results.docs.map((d) => d.ref.parent.parent.id).sort();
+  if (JSON.stringify(ids) !== JSON.stringify(['MOBILE_TERM_A', 'MOBILE_TERM_B'])) {
+    throw new Error(`Unexpected discovery results: ${ids}`);
+  }
+  for (const id of ids) {
+    await assertSucceeds(setDoc(doc(db, 'courseClasses', id, 'studentAccess', 'first-mobile-login'), {
+      studentId, emailNormalized: email, createdAt: serverTimestamp(),
+    }));
+    await assertSucceeds(getDoc(doc(db, 'courseClasses', id)));
+  }
+});
+
+test('mobile transaction uses canonical payload and concurrent scans preserve one record', async () => {
+  const email = 'concurrent@example.com';
+  const studentId = createHash('sha256').update(email).digest('hex');
+  const id = 'MOBILE_TRANSACTION';
+  const sessionId = 'mobile-transaction-session';
+  const token = 'mobile-transaction-token';
+  const user = 'mobile-transaction-user';
+  const transactionTeacher = 'mobile-transaction-teacher';
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, 'teachers', transactionTeacher), { active: true });
+    await setDoc(doc(db, 'courseClasses', id), { ownerUid: transactionTeacher, subject: 'PRM393', classCode: 'MOB' });
+    await setDoc(doc(db, 'courseClasses', id, 'students', studentId), {
+      email, emailNormalized: email, studentCode: 'SE123', fullName: 'Student Test', active: true,
+    });
+    await setDoc(doc(db, 'attendanceSessions', sessionId), {
+      ownerUid: transactionTeacher, courseClassId: id, subject: 'PRM393', classCode: 'MOB',
+      slot: 1, slotKey: '1', date: '2026-10-03', status: 'active', currentQrGeneration: 1, validitySeconds: 120,
+    });
+    await setDoc(doc(db, 'qrTokens', token), { ownerUid: transactionTeacher, sessionId,
+      issuedAt: new Date(), validitySeconds: 120, qrGeneration: 1 });
+    await setDoc(doc(db, 'attendanceCheckoutCodes', sessionId), { ownerUid: transactionTeacher, sessionId,
+      issuedAt: new Date(), code: 'AB123', generation: 1, rotationSeconds: 3600 });
+  });
+  const db = testEnvironment.authenticatedContext(user, {
+    email: 'CONCURRENT@example.com', firebase: { sign_in_provider: 'google.com' },
+  }).firestore();
+  const ref = doc(db, 'attendance', id, 'slots', '1', 'records', studentId);
+  async function scan() {
+    return runTransaction(db, async (tx) => {
+      await tx.get(doc(db, 'qrTokens', token));
+      await tx.get(doc(db, 'attendanceSessions', sessionId));
+      const profile = (await tx.get(doc(db, 'courseClasses', id, 'students', studentId))).data();
+      const existing = await tx.get(ref);
+      if (existing.exists()) return existing.data().attendanceStatus;
+      tx.set(ref, {
+        ownerUid: transactionTeacher, firebaseUid: user, studentId, email: profile.email, emailNormalized: email,
+        studentCode: profile.studentCode, fullName: profile.fullName, sessionId, courseClassId: id,
+        subject: 'PRM393', classCode: 'MOB', slot: 1, slotKey: '1', date: '2026-10-03',
+        qrToken: token, checkoutCode: 'AB123', checkedInAt: serverTimestamp(), createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(), updatedBy: user, syncStatus: 'pending',
+        attendanceStatus: 'present', recordSource: 'qr', revision: 1,
+      });
+      return 'present';
+    });
+  }
+  await Promise.all([assertSucceeds(scan()), assertSucceeds(scan())]);
+  const record = await assertSucceeds(getDoc(ref));
+  if (record.data().revision !== 1 || record.data().attendanceStatus !== 'present') throw new Error('Duplicate scan altered record');
+  await assertFails(updateDoc(ref, { attendanceStatus: 'excused' }));
+  await assertFails(deleteDoc(ref));
+  await testEnvironment.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), 'attendance', id, 'slots', '1', 'records', studentId), { attendanceStatus: 'absent' });
+  });
+  if (await assertSucceeds(scan()) !== 'absent') throw new Error('Teacher decision was overwritten');
 });
 
 // =============================================================================

@@ -3,7 +3,7 @@ import {
   browserSessionPersistence, getAuth, inMemoryPersistence,
   onAuthStateChanged, setPersistence, signOut,
 } from 'firebase/auth';
-import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, getFirestore, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { googleSignInError, signInWithGoogle } from './google_sign_in.js';
 
 const title = document.querySelector('#title');
@@ -72,10 +72,9 @@ export async function startLeave(config, courseClassId) {
     course = courseDoc.data();
     const schedule = Array.isArray(course.schedule) ? course.schedule : [];
     requests = new Map();
-    for (const slot of schedule) {
-      const request = await getDoc(doc(db, ...base, 'leaveRequests', `${currentStudentId}_${slot.number}`));
-      if (request.exists()) requests.set(slot.number, request.data());
-    }
+    const history = await getDocs(query(collection(db, ...base, 'leaveRequests'),
+      where('firebaseUid', '==', user.uid)));
+    for (const request of history.docs) requests.set(request.data().slot, request.data());
     slotsElement.replaceChildren();
     historyElement.replaceChildren();
     const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });

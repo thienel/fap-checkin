@@ -1,0 +1,8 @@
+{
+  "FIREBASE_API_KEY": "your-android-firebase-api-key",
+  "FIREBASE_APP_ID": "1:000000000000:android:your-android-app-id",
+  "FIREBASE_PROJECT_ID": "fap-checkin-c8c8d",
+  "FIREBASE_MESSAGING_SENDER_ID": "77988315843",
+  "GOOGLE_SERVER_CLIENT_ID": "your-web-oauth-client-id.apps.googleusercontent.com",
+  "PUBLIC_WEB_URL": "https://fap-checkin-c8c8d.web.app"
+}
